@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  router-checkin:
+    build: .
+    container_name: router-checkin
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./balance_hash.txt:/app/balance_hash.txt
+    environment:
+      - TZ=Asia/Shanghai
