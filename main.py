@@ -55,10 +55,16 @@ async def main():
     print(f'总计: {len(results)} 个账号')
     print(f'成功: {success_count} 个')
     print(f'失败: {failed_count} 个')
+    print()
 
     for result in results:
         status = '✓' if result['success'] else '✗'
         print(f'{status} [{result["platform"]}] {result["name"]}: {result["message"]}')
+
+        # 显示余额信息
+        if result.get('balance'):
+            balance = result['balance']
+            print(f'  💰 余额: ${balance["quota"]}, 已用: ${balance["used"]}')
 
     print('='*60)
 
