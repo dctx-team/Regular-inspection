@@ -114,17 +114,17 @@ class RouterCheckin:
             if not user_cookies:
                 return self._make_result(platform, account_name, False, 'Cookies 格式错误')
 
-            # 获取 WAF cookies
+            # 尝试获取 WAF cookies（尝试多个 URL）
             print(f'[STEP 1] 获取 WAF cookies...')
-            waf_cookies = await self._get_waf_cookies(account_name, 'https://agentrouter.org/login')
+            waf_cookies = await self._get_waf_cookies_with_fallback(
+                account_name,
+                ['https://agentrouter.org', 'https://agentrouter.org/console']
+            )
 
-            if not waf_cookies:
-                return self._make_result(platform, account_name, False, '无法获取 WAF cookies')
+            # 合并 cookies（即使没有 WAF cookies 也继续）
+            all_cookies = {**waf_cookies, **user_cookies} if waf_cookies else user_cookies
 
-            # 合并 cookies
-            all_cookies = {**waf_cookies, **user_cookies}
-
-            # AgentRouter 可能使用相同的签到API
+            # 执行签到请求
             print(f'[STEP 2] 执行签到请求...')
             success, message, balance = await self._do_agentrouter_checkin(
                 account_name, all_cookies, api_user
@@ -142,7 +142,18 @@ class RouterCheckin:
             print(f'[ERROR] {error_msg}')
             return self._make_result(platform, account_name, False, error_msg)
 
-    async def _get_waf_cookies(self, account_name: str, url: str) -> Optional[Dict[str, str]]:
+    async def _get_waf_cookies_with_fallback(self, account_name: str, urls: List[str]) -> Optional[Dict[str, str]]:
+        """尝试多个 URL 获取 WAF cookies"""
+        for url in urls:
+            print(f'[INFO] 尝试 URL: {url}')
+            cookies = await self._get_waf_cookies(account_name, url, timeout=20000)
+            if cookies:
+                return cookies
+
+        print(f'[WARN] 所有 URL 均未获取到 WAF cookies，将只使用用户 cookies')
+        return None
+
+    async def _get_waf_cookies(self, account_name: str, url: str, timeout: int = 30000) -> Optional[Dict[str, str]]:
         """使用 Playwright 获取 WAF cookies"""
         async with async_playwright() as p:
             import tempfile
@@ -163,13 +174,13 @@ class RouterCheckin:
                 page = await context.new_page()
 
                 try:
-                    print(f'[INFO] 访问登录页面获取 cookies...')
-                    await page.goto(url, wait_until='networkidle', timeout=30000)
+                    print(f'[INFO] 访问页面获取 cookies...')
+                    await page.goto(url, wait_until='domcontentloaded', timeout=timeout)
 
                     try:
-                        await page.wait_for_function('document.readyState === "complete"', timeout=5000)
+                        await page.wait_for_function('document.readyState === "complete"', timeout=3000)
                     except Exception:
-                        await page.wait_for_timeout(3000)
+                        await page.wait_for_timeout(2000)
 
                     cookies = await page.context.cookies()
 
