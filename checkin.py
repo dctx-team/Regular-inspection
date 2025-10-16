@@ -32,21 +32,63 @@ class RouterCheckin:
         results = []
 
         # 处理 AnyRouter 账号
+        anyrouter_results = []
         for i, account in enumerate(anyrouter_accounts):
             result = await self.checkin_anyrouter(account, i)
             results.append(result)
+            anyrouter_results.append(result)
             await asyncio.sleep(2)  # 避免请求过快
 
+        # 显示 AnyRouter 平台汇总
+        if anyrouter_results:
+            self._print_platform_summary('AnyRouter', anyrouter_results)
+
         # 处理 AgentRouter 账号
+        agentrouter_results = []
         for i, account in enumerate(agentrouter_accounts):
             result = await self.checkin_agentrouter(account, i)
             results.append(result)
+            agentrouter_results.append(result)
             await asyncio.sleep(2)
+
+        # 显示 AgentRouter 平台汇总
+        if agentrouter_results:
+            self._print_platform_summary('AgentRouter', agentrouter_results)
 
         # 检查余额变化
         self._check_balance_change()
 
         return results
+
+    def _print_platform_summary(self, platform_name: str, platform_results: List[Dict]):
+        """打印单个平台的汇总统计"""
+        success_count = sum(1 for r in platform_results if r['success'])
+        failed_count = len(platform_results) - success_count
+
+        total_quota = 0
+        total_used = 0
+        has_balance = False
+
+        for result in platform_results:
+            if result.get('balance'):
+                has_balance = True
+                balance = result['balance']
+                total_quota += balance['quota']
+                total_used += balance['used']
+
+        print()
+        print('─' * 60)
+        print(f'📊 {platform_name} 平台汇总')
+        print('─' * 60)
+        print(f'账号数量: {len(platform_results)} 个')
+        print(f'成功: {success_count} 个 | 失败: {failed_count} 个')
+
+        if has_balance:
+            print(f'总余额: ${total_quota:.2f}')
+            print(f'总已用: ${total_used:.2f}')
+            print(f'总可用: ${total_quota - total_used:.2f}')
+
+        print('─' * 60)
 
     async def checkin_anyrouter(self, account: Dict, index: int) -> Dict:
         """AnyRouter 签到"""
