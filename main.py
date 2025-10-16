@@ -57,6 +57,12 @@ async def main():
     print(f'失败: {failed_count} 个')
     print()
 
+    # 统计余额信息
+    total_quota = 0
+    total_used = 0
+    platform_stats = {'AnyRouter': {'count': 0, 'quota': 0, 'used': 0},
+                      'AgentRouter': {'count': 0, 'quota': 0, 'used': 0}}
+
     for result in results:
         status = '✓' if result['success'] else '✗'
         print(f'{status} [{result["platform"]}] {result["name"]}: {result["message"]}')
@@ -65,6 +71,33 @@ async def main():
         if result.get('balance'):
             balance = result['balance']
             print(f'  💰 余额: ${balance["quota"]}, 已用: ${balance["used"]}')
+
+            # 累计统计
+            total_quota += balance["quota"]
+            total_used += balance["used"]
+            platform_stats[result["platform"]]['count'] += 1
+            platform_stats[result["platform"]]['quota'] += balance["quota"]
+            platform_stats[result["platform"]]['used'] += balance["used"]
+
+    # 显示汇总统计
+    print()
+    print('-' * 60)
+    print('💰 余额汇总统计')
+    print('-' * 60)
+
+    for platform, stats in platform_stats.items():
+        if stats['count'] > 0:
+            print(f'{platform}: {stats["count"]} 个账号')
+            print(f'  总余额: ${stats["quota"]:.2f}')
+            print(f'  总已用: ${stats["used"]:.2f}')
+            print(f'  可用额度: ${stats["quota"] - stats["used"]:.2f}')
+
+    if total_quota > 0:
+        print()
+        print(f'📊 全平台汇总:')
+        print(f'  总余额: ${total_quota:.2f}')
+        print(f'  总已用: ${total_used:.2f}')
+        print(f'  总可用: ${total_quota - total_used:.2f}')
 
     print('='*60)
 

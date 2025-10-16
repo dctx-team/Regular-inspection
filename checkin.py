@@ -308,7 +308,7 @@ class RouterCheckin:
 
                 if user_response.status_code == 200:
                     user_data = user_response.json()
-                    print(f'[DEBUG] 响应数据: {user_data}')
+                    # 不显示完整响应数据，避免泄露敏感信息
 
                     if user_data.get('success'):
                         data = user_data.get('data', {})
