@@ -470,51 +470,56 @@ class RouterCheckin:
             print(f'[WARN] 保存余额数据失败: {e}')
 
     def _show_balance_change(self, account_key: str, current_balance: Dict):
-        """显示余额变化"""
+        """显示余额变化
+
+        逻辑说明：
+        - quota: 可用余额
+        - used: 已用额度
+        - 账户总充值 = quota + used
+        """
         if account_key not in self.last_balance_data:
             # 首次记录，不显示变化
             return
 
         last_balance = self.last_balance_data[account_key]
-        last_quota = last_balance.get('quota', 0)
-        last_used = last_balance.get('used', 0)
-        current_quota = current_balance['quota']
-        current_used = current_balance['used']
+        last_quota = last_balance.get('quota', 0)  # 上次可用余额
+        last_used = last_balance.get('used', 0)    # 上次已用
+        current_quota = current_balance['quota']    # 当前可用余额
+        current_used = current_balance['used']      # 当前已用
 
-        quota_change = current_quota - last_quota
+        # 计算总充值变化
+        last_total = last_quota + last_used      # 上次总充值
+        current_total = current_quota + current_used  # 当前总充值
+        total_recharge = current_total - last_total   # 新充值金额
+
+        # 计算消费变化
         used_change = current_used - last_used
 
-        # 计算实际余额变化（可用额度 = 总额度 - 已用）
-        last_available = last_quota - last_used
-        current_available = current_quota - current_used
-        available_change = current_available - last_available
+        # 计算可用余额变化
+        quota_change = current_quota - last_quota
 
-        if quota_change != 0 or used_change != 0:
+        if total_recharge != 0 or used_change != 0:
             print(f'[CHANGE] 余额变更:')
 
-            # 显示总额度变化
-            if quota_change > 0:
-                print(f'  📈 充值/增加: +${quota_change:.2f} (${last_quota:.2f} → ${current_quota:.2f})')
-            elif quota_change < 0:
-                print(f'  📉 总额度: ${last_quota:.2f} → ${current_quota:.2f} (${quota_change:.2f})')
+            # 显示充值
+            if total_recharge > 0:
+                print(f'  💳 本期充值: +${total_recharge:.2f} (总充值: ${last_total:.2f} → ${current_total:.2f})')
+            elif total_recharge < 0:
+                print(f'  ⚠️  总充值减少: ${total_recharge:.2f} (${last_total:.2f} → ${current_total:.2f})')
 
-            # 显示已用变化
+            # 显示消费
             if used_change > 0:
-                print(f'  📊 本期消费: +${used_change:.2f} (${last_used:.2f} → ${current_used:.2f})')
+                print(f'  📊 本期消费: +${used_change:.2f} (已用: ${last_used:.2f} → ${current_used:.2f})')
             elif used_change < 0:
-                print(f'  📊 已用: ${last_used:.2f} → ${current_used:.2f} (${used_change:.2f})')
+                print(f'  🔄 已用减少: ${used_change:.2f} (${last_used:.2f} → ${current_used:.2f})')
 
-            # 显示可用余额变化
-            if available_change > 0:
-                print(f'  💰 可用余额增加: +${available_change:.2f} (${last_available:.2f} → ${current_available:.2f})')
-            elif available_change < 0:
-                print(f'  💰 可用余额减少: ${available_change:.2f} (${last_available:.2f} → ${current_available:.2f})')
+            # 显示可用余额变化（净效果）
+            if quota_change > 0:
+                print(f'  💰 可用余额增加: +${quota_change:.2f} (${last_quota:.2f} → ${current_quota:.2f})')
+            elif quota_change < 0:
+                print(f'  💰 可用余额减少: ${quota_change:.2f} (${last_quota:.2f} → ${current_quota:.2f})')
             else:
-                # 可用余额未变的特殊情况
-                if quota_change > 0 and used_change > 0:
-                    print(f'  ℹ️  可用余额不变 (充值 ${quota_change:.2f} = 消费 ${used_change:.2f})')
-                elif quota_change == 0 and used_change == 0:
-                    print(f'  ℹ️  余额无变化')
+                print(f'  ℹ️  可用余额不变: ${current_quota:.2f}')
 
     def _save_balance_hash(self, balance_hash: str):
         """保存余额哈希"""
