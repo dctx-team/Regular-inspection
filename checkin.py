@@ -494,25 +494,27 @@ class RouterCheckin:
 
             # 显示总额度变化
             if quota_change > 0:
-                print(f'  📈 总额度: ${last_quota:.2f} → ${current_quota:.2f} (+${quota_change:.2f})')
+                print(f'  📈 充值/增加: +${quota_change:.2f} (${last_quota:.2f} → ${current_quota:.2f})')
             elif quota_change < 0:
                 print(f'  📉 总额度: ${last_quota:.2f} → ${current_quota:.2f} (${quota_change:.2f})')
 
             # 显示已用变化
             if used_change > 0:
-                print(f'  📊 已用: ${last_used:.2f} → ${current_used:.2f} (+${used_change:.2f})')
+                print(f'  📊 本期消费: +${used_change:.2f} (${last_used:.2f} → ${current_used:.2f})')
             elif used_change < 0:
                 print(f'  📊 已用: ${last_used:.2f} → ${current_used:.2f} (${used_change:.2f})')
 
             # 显示可用余额变化
             if available_change > 0:
-                print(f'  💰 可用余额: ${last_available:.2f} → ${current_available:.2f} (+${available_change:.2f})')
+                print(f'  💰 可用余额增加: +${available_change:.2f} (${last_available:.2f} → ${current_available:.2f})')
             elif available_change < 0:
-                print(f'  💰 可用余额: ${last_available:.2f} → ${current_available:.2f} (${available_change:.2f})')
+                print(f'  💰 可用余额减少: ${available_change:.2f} (${last_available:.2f} → ${current_available:.2f})')
             else:
-                # 总额度增加的部分被使用了
-                if quota_change > 0 and used_change > 0 and quota_change == used_change:
-                    print(f'  ℹ️  新增的 ${quota_change:.2f} 已全部使用')
+                # 可用余额未变的特殊情况
+                if quota_change > 0 and used_change > 0:
+                    print(f'  ℹ️  可用余额不变 (充值 ${quota_change:.2f} = 消费 ${used_change:.2f})')
+                elif quota_change == 0 and used_change == 0:
+                    print(f'  ℹ️  余额无变化')
 
     def _save_balance_hash(self, balance_hash: str):
         """保存余额哈希"""
