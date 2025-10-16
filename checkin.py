@@ -88,7 +88,6 @@ class RouterCheckin:
         if has_balance:
             print(f'总余额: ${total_quota:.2f}')
             print(f'总已用: ${total_used:.2f}')
-            print(f'总可用: ${total_quota - total_used:.2f}')
 
         print('─' * 60)
 

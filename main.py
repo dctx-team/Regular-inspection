@@ -99,14 +99,12 @@ async def main():
             print(f'{platform}: {stats["count"]} 个账号')
             print(f'  总余额: ${stats["quota"]:.2f}')
             print(f'  总已用: ${stats["used"]:.2f}')
-            print(f'  可用额度: ${stats["quota"] - stats["used"]:.2f}')
 
     if total_quota > 0:
         print()
         print(f'📊 全平台汇总:')
         print(f'  总余额: ${total_quota:.2f}')
         print(f'  总已用: ${total_used:.2f}')
-        print(f'  总可用: ${total_quota - total_used:.2f}')
 
     print('='*60)
 
