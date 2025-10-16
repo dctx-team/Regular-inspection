@@ -286,17 +286,30 @@ class RouterCheckin:
             # 尝试获取用户信息（测试登录状态）
             balance = None
             try:
+                print(f'[INFO] 尝试获取用户信息...')
                 user_response = await client.get('https://agentrouter.org/api/user/self', headers=headers)
+                print(f'[DEBUG] 用户信息响应: HTTP {user_response.status_code}')
+
                 if user_response.status_code == 200:
                     user_data = user_response.json()
+                    print(f'[DEBUG] 响应数据: {user_data}')
+
                     if user_data.get('success'):
                         data = user_data.get('data', {})
                         quota = round(data.get('quota', 0) / 500000, 2)
                         used = round(data.get('used_quota', 0) / 500000, 2)
                         balance = {'quota': quota, 'used': used}
                         print(f'[INFO] 当前余额: ${quota}, 已用: ${used}')
+                    else:
+                        print(f'[WARN] API返回失败: {user_data.get("message", "未知错误")}')
+                else:
+                    print(f'[WARN] 获取用户信息失败: HTTP {user_response.status_code}')
+                    try:
+                        print(f'[DEBUG] 错误响应: {user_response.text[:200]}')
+                    except:
+                        pass
             except Exception as e:
-                print(f'[WARN] 获取余额失败: {e}')
+                print(f'[ERROR] 获取余额异常: {e}')
 
             # 尝试签到（如果有签到接口）
             checkin_headers = headers.copy()
