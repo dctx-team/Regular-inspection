@@ -220,7 +220,10 @@ class RouterCheckin:
             # 获取用户信息
             balance = None
             try:
+                print(f'[INFO] 尝试获取用户信息...')
                 user_response = await client.get('https://anyrouter.top/api/user/self', headers=headers)
+                print(f'[DEBUG] 用户信息响应: HTTP {user_response.status_code}')
+
                 if user_response.status_code == 200:
                     user_data = user_response.json()
                     if user_data.get('success'):
@@ -229,8 +232,21 @@ class RouterCheckin:
                         used = round(data.get('used_quota', 0) / 500000, 2)
                         balance = {'quota': quota, 'used': used}
                         print(f'[INFO] 当前余额: ${quota}, 已用: ${used}')
+                    else:
+                        print(f'[WARN] API返回失败: {user_data.get("message", "未知错误")}')
+                elif user_response.status_code == 401:
+                    print(f'[ERROR] ⚠️  认证失败 - Session Cookie 已过期！')
+                    print(f'[ERROR] 请重新登录 https://anyrouter.top/register?aff=hgT6 获取新的 session cookie')
+                    print(f'[ERROR] 并更新 GitHub Secrets 中的 ANYROUTER_ACCOUNTS 配置')
+                    try:
+                        error_data = user_response.json()
+                        print(f'[ERROR] 错误信息: {error_data.get("message", "未知错误")}')
+                    except:
+                        pass
+                else:
+                    print(f'[WARN] 获取用户信息失败: HTTP {user_response.status_code}')
             except Exception as e:
-                print(f'[WARN] 获取余额失败: {e}')
+                print(f'[ERROR] 获取余额异常: {e}')
 
             # 执行签到
             checkin_headers = headers.copy()
@@ -302,6 +318,15 @@ class RouterCheckin:
                         print(f'[INFO] 当前余额: ${quota}, 已用: ${used}')
                     else:
                         print(f'[WARN] API返回失败: {user_data.get("message", "未知错误")}')
+                elif user_response.status_code == 401:
+                    print(f'[ERROR] ⚠️  认证失败 - Session Cookie 已过期！')
+                    print(f'[ERROR] 请重新登录 https://agentrouter.org/register?aff=7Stf 获取新的 session cookie')
+                    print(f'[ERROR] 并更新 GitHub Secrets 中的 AGENTROUTER_ACCOUNTS 配置')
+                    try:
+                        error_data = user_response.json()
+                        print(f'[ERROR] 错误信息: {error_data.get("message", "未知错误")}')
+                    except:
+                        pass
                 else:
                     print(f'[WARN] 获取用户信息失败: HTTP {user_response.status_code}')
                     try:

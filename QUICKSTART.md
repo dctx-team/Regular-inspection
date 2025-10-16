@@ -4,7 +4,7 @@
 
 ### 1. 登录网站
 
-访问 https://anyrouter.top 或 https://agentrouter.org 并登录您的账号。
+访问 https://anyrouter.top/register?aff=hgT6 或 https://agentrouter.org/register?aff=7Stf 并登录您的账号。
 
 ### 2. 获取 Session Cookie
 

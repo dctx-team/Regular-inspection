@@ -15,8 +15,8 @@
 
 ## 支持的平台
 
-- [AnyRouter](https://anyrouter.top/) - AI API 聚合平台
-- [AgentRouter](https://agentrouter.org/) - AI Coding 公益平台
+- [AnyRouter](https://anyrouter.top/register?aff=hgT6) - AI API 聚合平台
+- [AgentRouter](https://agentrouter.org/register?aff=7Stf) - AI Coding 公益平台
 
 ## 快速开始
 
