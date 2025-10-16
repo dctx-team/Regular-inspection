@@ -32,6 +32,7 @@ ENV/
 
 # 数据文件
 balance_hash.txt
+balance_data.json
 *.log
 
 # IDE

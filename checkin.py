@@ -17,6 +17,7 @@ from config import parse_cookies
 
 
 BALANCE_HASH_FILE = 'balance_hash.txt'
+BALANCE_DATA_FILE = 'balance_data.json'
 
 
 class RouterCheckin:
@@ -24,6 +25,7 @@ class RouterCheckin:
 
     def __init__(self):
         self.last_balance_hash = self._load_balance_hash()
+        self.last_balance_data = self._load_balance_data()
         self.current_balances = {}
         self.balance_changed = False
 
@@ -127,8 +129,11 @@ class RouterCheckin:
 
             # 记录余额
             if balance:
-                account_key = f'anyrouter_{index}'
+                account_key = f'anyrouter_{account_name}'  # 使用账号名作为key
                 self.current_balances[account_key] = balance
+
+                # 显示余额变化
+                self._show_balance_change(account_key, balance)
 
             return self._make_result(platform, account_name, success, message, balance)
 
@@ -174,8 +179,11 @@ class RouterCheckin:
 
             # 记录余额
             if balance:
-                account_key = f'agentrouter_{index}'
+                account_key = f'agentrouter_{account_name}'  # 使用账号名作为key
                 self.current_balances[account_key] = balance
+
+                # 显示余额变化
+                self._show_balance_change(account_key, balance)
 
             return self._make_result(platform, account_name, success, message, balance)
 
@@ -443,6 +451,69 @@ class RouterCheckin:
             pass
         return None
 
+    def _load_balance_data(self) -> Dict:
+        """加载上次的余额数据"""
+        try:
+            if os.path.exists(BALANCE_DATA_FILE):
+                with open(BALANCE_DATA_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_balance_data(self):
+        """保存当前余额数据"""
+        try:
+            with open(BALANCE_DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.current_balances, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f'[WARN] 保存余额数据失败: {e}')
+
+    def _show_balance_change(self, account_key: str, current_balance: Dict):
+        """显示余额变化"""
+        if account_key not in self.last_balance_data:
+            # 首次记录，不显示变化
+            return
+
+        last_balance = self.last_balance_data[account_key]
+        last_quota = last_balance.get('quota', 0)
+        last_used = last_balance.get('used', 0)
+        current_quota = current_balance['quota']
+        current_used = current_balance['used']
+
+        quota_change = current_quota - last_quota
+        used_change = current_used - last_used
+
+        # 计算实际余额变化（可用额度 = 总额度 - 已用）
+        last_available = last_quota - last_used
+        current_available = current_quota - current_used
+        available_change = current_available - last_available
+
+        if quota_change != 0 or used_change != 0:
+            print(f'[CHANGE] 余额变更:')
+
+            # 显示总额度变化
+            if quota_change > 0:
+                print(f'  📈 总额度: ${last_quota:.2f} → ${current_quota:.2f} (+${quota_change:.2f})')
+            elif quota_change < 0:
+                print(f'  📉 总额度: ${last_quota:.2f} → ${current_quota:.2f} (${quota_change:.2f})')
+
+            # 显示已用变化
+            if used_change > 0:
+                print(f'  📊 已用: ${last_used:.2f} → ${current_used:.2f} (+${used_change:.2f})')
+            elif used_change < 0:
+                print(f'  📊 已用: ${last_used:.2f} → ${current_used:.2f} (${used_change:.2f})')
+
+            # 显示可用余额变化
+            if available_change > 0:
+                print(f'  💰 可用余额: ${last_available:.2f} → ${current_available:.2f} (+${available_change:.2f})')
+            elif available_change < 0:
+                print(f'  💰 可用余额: ${last_available:.2f} → ${current_available:.2f} (${available_change:.2f})')
+            else:
+                # 总额度增加的部分被使用了
+                if quota_change > 0 and used_change > 0 and quota_change == used_change:
+                    print(f'  ℹ️  新增的 ${quota_change:.2f} 已全部使用')
+
     def _save_balance_hash(self, balance_hash: str):
         """保存余额哈希"""
         try:
@@ -476,8 +547,9 @@ class RouterCheckin:
             self.balance_changed = False
             print('[INFO] 余额无变化')
 
-        # 保存新的哈希
+        # 保存新的哈希和余额数据
         self._save_balance_hash(current_hash)
+        self._save_balance_data()
 
     def has_balance_changed(self) -> bool:
         """余额是否变化"""

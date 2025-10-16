@@ -7,17 +7,26 @@ Router平台自动签到脚本主程序
 import asyncio
 import sys
 from datetime import datetime
+import pytz
 
 from checkin import RouterCheckin
 from config import load_config
 from notify import notify
+
+# 设置北京时区
+BEIJING_TZ = pytz.timezone('Asia/Shanghai')
+
+
+def get_beijing_time():
+    """获取北京时间"""
+    return datetime.now(BEIJING_TZ)
 
 
 async def main():
     """主函数"""
     print('='*60)
     print('Router平台自动签到脚本')
-    print(f'执行时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+    print(f'执行时间: {get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")} (北京时间)')
     print('='*60)
 
     # 加载配置
@@ -119,7 +128,7 @@ async def notify_results(results, success_count, failed_count):
     title = 'Router平台签到提醒'
 
     content_lines = [
-        f'⏰ 执行时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+        f'⏰ 执行时间: {get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")} (北京时间)',
         '',
         f'📊 统计结果:',
         f'✓ 成功: {success_count} 个',
