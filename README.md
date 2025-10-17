@@ -41,7 +41,18 @@
    ]
    ```
 
-   **AgentRouter 配置：**
+   **AgentRouter 配置（推荐使用账号密码）：**
+   ```json
+   AGENTROUTER_ACCOUNTS=[
+     {
+       "name": "AgentRouter主账号",
+       "email": "your_email@example.com",
+       "password": "your_password"
+     }
+   ]
+   ```
+
+   或使用传统 Cookie 方式：
    ```json
    AGENTROUTER_ACCOUNTS=[
      {
@@ -110,9 +121,24 @@ docker-compose run --rm router-checkin
 
 ## 配置说明
 
-### 获取账号信息
+### 账号配置方式
 
-#### AnyRouter / AgentRouter
+#### AgentRouter（推荐：账号密码登录）
+
+**为什么推荐账号密码？**
+- AgentRouter 会定期重启服务器，导致 Cookie 失效
+- 账号密码登录可以自动获取新的 Session，无需手动更新
+
+**配置示例：**
+```json
+{
+  "name": "AgentRouter主账号",
+  "email": "your_email@example.com",
+  "password": "your_password"
+}
+```
+
+#### AnyRouter / AgentRouter（传统：Cookie 方式）
 
 1. **获取 Session Cookie：**
    - 打开浏览器，访问网站并登录
@@ -124,6 +150,17 @@ docker-compose run --rm router-checkin
    - 开发者工具切换到 `Network` 标签
    - 刷新页面或进行操作
    - 找到任意请求，查看请求头中的 `New-Api-User` 字段值
+
+**配置示例：**
+```json
+{
+  "name": "账号名称",
+  "cookies": {
+    "session": "your_session_cookie"
+  },
+  "api_user": "12345"
+}
+```
 
 ### 环境变量
 

@@ -149,26 +149,46 @@ class RouterCheckin:
         print(f'\n[PROCESSING] 正在处理 [{platform}] {account_name}')
 
         try:
-            # 解析配置
-            cookies_data = account.get('cookies', {})
-            api_user = account.get('api_user', '')
+            # 检查是否使用账号密码登录
+            email = account.get('email', '')
+            password = account.get('password', '')
 
-            if not api_user:
-                return self._make_result(platform, account_name, False, 'API User ID 未配置')
+            if email and password:
+                # 使用账号密码登录
+                print(f'[STEP 1] 使用账号密码登录...')
+                login_result = await self._login_agentrouter(email, password)
 
-            user_cookies = parse_cookies(cookies_data)
-            if not user_cookies:
-                return self._make_result(platform, account_name, False, 'Cookies 格式错误')
+                if not login_result:
+                    return self._make_result(platform, account_name, False, '账号密码登录失败')
 
-            # 尝试获取 WAF cookies（尝试多个 URL）
-            print(f'[STEP 1] 获取 WAF cookies...')
-            waf_cookies = await self._get_waf_cookies_with_fallback(
-                account_name,
-                ['https://agentrouter.org', 'https://agentrouter.org/console']
-            )
+                user_cookies = login_result['cookies']
+                api_user = login_result['api_user']
 
-            # 合并 cookies（即使没有 WAF cookies 也继续）
-            all_cookies = {**waf_cookies, **user_cookies} if waf_cookies else user_cookies
+                print(f'[SUCCESS] 登录成功，获取到 session')
+            else:
+                # 使用传统的 cookies 方式
+                cookies_data = account.get('cookies', {})
+                api_user = account.get('api_user', '')
+
+                if not api_user:
+                    return self._make_result(platform, account_name, False, 'API User ID 未配置')
+
+                user_cookies = parse_cookies(cookies_data)
+                if not user_cookies:
+                    return self._make_result(platform, account_name, False, 'Cookies 格式错误')
+
+                # 尝试获取 WAF cookies（尝试多个 URL）
+                print(f'[STEP 1] 获取 WAF cookies...')
+                waf_cookies = await self._get_waf_cookies_with_fallback(
+                    account_name,
+                    ['https://agentrouter.org', 'https://agentrouter.org/console']
+                )
+
+                # 合并 cookies（即使没有 WAF cookies 也继续）
+                if waf_cookies:
+                    user_cookies = {**waf_cookies, **user_cookies}
+
+            all_cookies = user_cookies
 
             # 执行签到请求
             print(f'[STEP 2] 执行签到请求...')
@@ -248,6 +268,107 @@ class RouterCheckin:
                 except Exception as e:
                     print(f'[ERROR] 获取 WAF cookies 失败: {e}')
                     await context.close()
+                    return None
+
+    async def _login_agentrouter(self, email: str, password: str) -> Optional[Dict]:
+        """使用账号密码登录 AgentRouter 获取 session"""
+        async with async_playwright() as p:
+            import tempfile
+            with tempfile.TemporaryDirectory() as temp_dir:
+                try:
+                    context = await p.chromium.launch_persistent_context(
+                        user_data_dir=temp_dir,
+                        headless=True,
+                        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+                        viewport={'width': 1920, 'height': 1080},
+                        args=[
+                            '--disable-blink-features=AutomationControlled',
+                            '--disable-dev-shm-usage',
+                            '--disable-web-security',
+                            '--no-sandbox',
+                        ],
+                    )
+
+                    page = await context.new_page()
+
+                    # 访问登录页面
+                    print(f'[INFO] 访问登录页面...')
+                    await page.goto('https://agentrouter.org/login', wait_until='domcontentloaded', timeout=30000)
+                    await page.wait_for_timeout(2000)
+
+                    # 填写登录表单
+                    print(f'[INFO] 填写登录信息...')
+                    await page.fill('input[type="email"], input[name="email"], input[placeholder*="邮箱"], input[placeholder*="Email"]', email)
+                    await page.fill('input[type="password"], input[name="password"]', password)
+                    await page.wait_for_timeout(1000)
+
+                    # 点击登录按钮
+                    print(f'[INFO] 提交登录...')
+                    await page.click('button[type="submit"], button:has-text("登录"), button:has-text("Login")')
+
+                    # 等待登录完成（等待跳转或特定元素出现）
+                    try:
+                        await page.wait_for_url('**/console**', timeout=10000)
+                        print(f'[SUCCESS] 登录成功，已跳转到控制台')
+                    except Exception:
+                        # 如果没有跳转，等待一下再检查
+                        await page.wait_for_timeout(3000)
+                        current_url = page.url
+                        if 'login' in current_url.lower():
+                            print(f'[ERROR] 登录失败，仍在登录页面')
+                            await context.close()
+                            return None
+
+                    # 获取所有 cookies
+                    cookies = await page.context.cookies()
+
+                    # 提取关键 cookies
+                    session_cookie = None
+                    waf_cookies = {}
+                    api_user = None
+
+                    for cookie in cookies:
+                        cookie_name = cookie.get('name')
+                        cookie_value = cookie.get('value')
+
+                        if cookie_name == 'session':
+                            session_cookie = cookie_value
+                        elif cookie_name in ['acw_tc', 'cdn_sec_tc', 'acw_sc__v2']:
+                            waf_cookies[cookie_name] = cookie_value
+
+                    if not session_cookie:
+                        print(f'[ERROR] 未获取到 session cookie')
+                        await context.close()
+                        return None
+
+                    # 尝试从页面获取 user ID
+                    try:
+                        # 访问 API 获取用户信息
+                        user_info_response = await page.evaluate('''
+                            async () => {
+                                const response = await fetch('/api/user/self');
+                                return await response.json();
+                            }
+                        ''')
+
+                        if user_info_response and user_info_response.get('success'):
+                            api_user = str(user_info_response.get('data', {}).get('id', ''))
+                            print(f'[SUCCESS] 获取到 User ID: {api_user}')
+                    except Exception as e:
+                        print(f'[WARN] 无法获取 User ID: {e}')
+
+                    await context.close()
+
+                    # 构建返回结果
+                    all_cookies = {'session': session_cookie, **waf_cookies}
+
+                    return {
+                        'cookies': all_cookies,
+                        'api_user': api_user or ''
+                    }
+
+                except Exception as e:
+                    print(f'[ERROR] 登录过程出错: {e}')
                     return None
 
     async def _do_anyrouter_checkin(self, account_name: str, cookies: Dict, api_user: str) -> tuple:

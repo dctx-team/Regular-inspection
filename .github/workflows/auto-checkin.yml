@@ -54,10 +54,21 @@ jobs:
         run: |
           python main.py
 
-      - name: 上传余额记录
+      - name: 提交余额数据
+        if: always()
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add balance_data.json balance_hash.txt || true
+          git diff --staged --quiet || git commit -m "自动更新余额数据 [skip ci]" || true
+          git push || true
+
+      - name: 上传余额记录（备份）
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: balance-hash-${{ github.run_number }}
-          path: balance_hash.txt
+          name: balance-data-${{ github.run_number }}
+          path: |
+            balance_hash.txt
+            balance_data.json
           retention-days: 7

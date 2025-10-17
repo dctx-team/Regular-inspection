@@ -31,8 +31,8 @@ ENV/
 .playwright/
 
 # 数据文件
-balance_hash.txt
-balance_data.json
+# balance_hash.txt  # 由 GitHub Actions 自动提交，用于余额变更追踪
+# balance_data.json # 由 GitHub Actions 自动提交，用于余额变更追踪
 *.log
 
 # IDE
