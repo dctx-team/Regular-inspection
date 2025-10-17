@@ -22,20 +22,48 @@ class NotificationKit:
 		if not self.email_user or not self.email_pass or not self.email_to:
 			raise ValueError('Email configuration not set')
 
-		# 使用简单的 MIMEText 而不是 MIMEMultipart，避免被识别为二进制
-		if msg_type == 'html':
-			msg = MIMEText(content, 'html', 'utf-8')
-		else:
-			msg = MIMEText(content, 'plain', 'utf-8')
+		try:
+			# 使用简单的 MIMEText 而不是 MIMEMultipart，避免被识别为二进制
+			if msg_type == 'html':
+				msg = MIMEText(content, 'html', 'utf-8')
+			else:
+				msg = MIMEText(content, 'plain', 'utf-8')
 
-		msg['From'] = f'Router签到助手 <{self.email_user}>'
-		msg['To'] = self.email_to
-		msg['Subject'] = title
+			msg['From'] = f'Router签到助手 <{self.email_user}>'
+			msg['To'] = self.email_to
+			msg['Subject'] = title
 
-		smtp_server = self.smtp_server if self.smtp_server else f'smtp.{self.email_user.split("@")[1]}'
-		with smtplib.SMTP_SSL(smtp_server, 465) as server:
-			server.login(self.email_user, self.email_pass)
-			server.send_message(msg)
+			# 自动检测 SMTP 服务器
+			if self.smtp_server:
+				smtp_host = self.smtp_server
+			else:
+				domain = self.email_user.split('@')[1]
+				smtp_host = f'smtp.{domain}'
+
+			# 尝试 SSL 连接 (端口 465)
+			try:
+				with smtplib.SMTP_SSL(smtp_host, 465, timeout=30) as server:
+					server.login(self.email_user, self.email_pass)
+					server.send_message(msg)
+			except Exception as ssl_error:
+				# 如果 SSL 失败，尝试 STARTTLS (端口 587)
+				print(f'[DEBUG] SSL (465) 连接失败，尝试 STARTTLS (587): {ssl_error}')
+				with smtplib.SMTP(smtp_host, 587, timeout=30) as server:
+					server.starttls()
+					server.login(self.email_user, self.email_pass)
+					server.send_message(msg)
+
+		except Exception as e:
+			# 提供更详细的错误信息
+			error_msg = str(e)
+			if 'authentication failed' in error_msg.lower() or 'auth' in error_msg.lower():
+				raise ValueError(f'邮箱认证失败，请检查邮箱地址和授权码: {error_msg}')
+			elif 'timeout' in error_msg.lower():
+				raise ValueError(f'SMTP 服务器连接超时，请检查网络: {error_msg}')
+			elif 'connection refused' in error_msg.lower():
+				raise ValueError(f'SMTP 服务器拒绝连接，请检查服务器地址: {smtp_host}')
+			else:
+				raise ValueError(f'邮件发送失败: {error_msg}')
 
 	def send_pushplus(self, title: str, content: str):
 		if not self.pushplus_token:
