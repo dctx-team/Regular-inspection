@@ -149,46 +149,26 @@ class RouterCheckin:
         print(f'\n[PROCESSING] 正在处理 [{platform}] {account_name}')
 
         try:
-            # 检查是否使用账号密码登录
-            email = account.get('email', '')
-            password = account.get('password', '')
+            # 解析配置
+            cookies_data = account.get('cookies', {})
+            api_user = account.get('api_user', '')
 
-            if email and password:
-                # 使用账号密码登录
-                print(f'[STEP 1] 使用账号密码登录...')
-                login_result = await self._login_agentrouter(email, password)
+            if not api_user:
+                return self._make_result(platform, account_name, False, 'API User ID 未配置')
 
-                if not login_result:
-                    return self._make_result(platform, account_name, False, '账号密码登录失败')
+            user_cookies = parse_cookies(cookies_data)
+            if not user_cookies:
+                return self._make_result(platform, account_name, False, 'Cookies 格式错误')
 
-                user_cookies = login_result['cookies']
-                api_user = login_result['api_user']
+            # 尝试获取 WAF cookies（尝试多个 URL）
+            print(f'[STEP 1] 获取 WAF cookies...')
+            waf_cookies = await self._get_waf_cookies_with_fallback(
+                account_name,
+                ['https://agentrouter.org', 'https://agentrouter.org/console']
+            )
 
-                print(f'[SUCCESS] 登录成功，获取到 session')
-            else:
-                # 使用传统的 cookies 方式
-                cookies_data = account.get('cookies', {})
-                api_user = account.get('api_user', '')
-
-                if not api_user:
-                    return self._make_result(platform, account_name, False, 'API User ID 未配置')
-
-                user_cookies = parse_cookies(cookies_data)
-                if not user_cookies:
-                    return self._make_result(platform, account_name, False, 'Cookies 格式错误')
-
-                # 尝试获取 WAF cookies（尝试多个 URL）
-                print(f'[STEP 1] 获取 WAF cookies...')
-                waf_cookies = await self._get_waf_cookies_with_fallback(
-                    account_name,
-                    ['https://agentrouter.org', 'https://agentrouter.org/console']
-                )
-
-                # 合并 cookies（即使没有 WAF cookies 也继续）
-                if waf_cookies:
-                    user_cookies = {**waf_cookies, **user_cookies}
-
-            all_cookies = user_cookies
+            # 合并 cookies（即使没有 WAF cookies 也继续）
+            all_cookies = {**waf_cookies, **user_cookies} if waf_cookies else user_cookies
 
             # 执行签到请求
             print(f'[STEP 2] 执行签到请求...')
@@ -270,219 +250,6 @@ class RouterCheckin:
                     await context.close()
                     return None
 
-    async def _login_agentrouter(self, email: str, password: str) -> Optional[Dict]:
-        """使用账号密码登录 AgentRouter 获取 session"""
-        async with async_playwright() as p:
-            import tempfile
-            with tempfile.TemporaryDirectory() as temp_dir:
-                try:
-                    context = await p.chromium.launch_persistent_context(
-                        user_data_dir=temp_dir,
-                        headless=True,
-                        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-                        viewport={'width': 1920, 'height': 1080},
-                        args=[
-                            '--disable-blink-features=AutomationControlled',
-                            '--disable-dev-shm-usage',
-                            '--disable-web-security',
-                            '--no-sandbox',
-                        ],
-                    )
-
-                    page = await context.new_page()
-
-                    # 尝试多个 URL 访问登录页面
-                    login_urls = [
-                        'https://agentrouter.org/login',
-                        'https://agentrouter.org/#/login',
-                        'https://agentrouter.org'
-                    ]
-
-                    login_success = False
-                    for url in login_urls:
-                        try:
-                            print(f'[INFO] 尝试访问: {url}')
-                            await page.goto(url, wait_until='domcontentloaded', timeout=20000)
-                            await page.wait_for_timeout(2000)
-
-                            # 检查是否有登录表单
-                            email_input = await page.query_selector('input[type="email"], input[name="email"], input[placeholder*="邮箱"], input[placeholder*="Email"], input[placeholder*="email"]')
-                            if email_input:
-                                login_success = True
-                                print(f'[SUCCESS] 成功访问登录页面')
-                                break
-                        except Exception as e:
-                            print(f'[WARN] {url} 访问失败: {str(e)[:50]}')
-                            continue
-
-                    if not login_success:
-                        print(f'[ERROR] 所有登录页面 URL 均访问失败')
-                        await context.close()
-                        return None
-
-                    # 填写登录表单
-                    try:
-                        print(f'[INFO] 填写登录信息...')
-
-                        # 查找邮箱输入框
-                        email_selectors = [
-                            'input[type="email"]',
-                            'input[name="email"]',
-                            'input[placeholder*="邮箱"]',
-                            'input[placeholder*="Email"]',
-                            'input[placeholder*="email"]'
-                        ]
-
-                        email_filled = False
-                        for selector in email_selectors:
-                            try:
-                                await page.fill(selector, email, timeout=3000)
-                                email_filled = True
-                                print(f'[DEBUG] 邮箱输入框定位成功: {selector}')
-                                break
-                            except:
-                                continue
-
-                        if not email_filled:
-                            print(f'[ERROR] 无法找到邮箱输入框')
-                            await context.close()
-                            return None
-
-                        # 查找密码输入框
-                        password_selectors = [
-                            'input[type="password"]',
-                            'input[name="password"]'
-                        ]
-
-                        password_filled = False
-                        for selector in password_selectors:
-                            try:
-                                await page.fill(selector, password, timeout=3000)
-                                password_filled = True
-                                print(f'[DEBUG] 密码输入框定位成功: {selector}')
-                                break
-                            except:
-                                continue
-
-                        if not password_filled:
-                            print(f'[ERROR] 无法找到密码输入框')
-                            await context.close()
-                            return None
-
-                        await page.wait_for_timeout(1000)
-
-                    except Exception as e:
-                        print(f'[ERROR] 填写表单失败: {e}')
-                        await context.close()
-                        return None
-
-                    # 点击登录按钮
-                    try:
-                        print(f'[INFO] 提交登录...')
-
-                        login_button_selectors = [
-                            'button[type="submit"]',
-                            'button:has-text("登录")',
-                            'button:has-text("Login")',
-                            'button:has-text("Sign in")',
-                            'button.login-button',
-                            'input[type="submit"]'
-                        ]
-
-                        button_clicked = False
-                        for selector in login_button_selectors:
-                            try:
-                                await page.click(selector, timeout=3000)
-                                button_clicked = True
-                                print(f'[DEBUG] 登录按钮点击成功: {selector}')
-                                break
-                            except:
-                                continue
-
-                        if not button_clicked:
-                            print(f'[ERROR] 无法找到登录按钮')
-                            await context.close()
-                            return None
-
-                    except Exception as e:
-                        print(f'[ERROR] 点击登录按钮失败: {e}')
-                        await context.close()
-                        return None
-
-                    # 等待登录完成（等待跳转或特定元素出现）
-                    try:
-                        print(f'[INFO] 等待登录完成...')
-                        await page.wait_for_url('**/console**', timeout=15000)
-                        print(f'[SUCCESS] 登录成功，已跳转到控制台')
-                    except Exception:
-                        # 如果没有跳转，等待一下再检查
-                        await page.wait_for_timeout(5000)
-                        current_url = page.url
-
-                        # 检查是否仍在登录页面
-                        if '/login' in current_url or '#/login' in current_url:
-                            # 检查是否有错误提示
-                            try:
-                                error_msg = await page.text_content('.error-message, .alert-danger, [class*="error"]', timeout=2000)
-                                print(f'[ERROR] 登录失败: {error_msg}')
-                            except:
-                                print(f'[ERROR] 登录失败，仍在登录页面: {current_url}')
-                            await context.close()
-                            return None
-                        else:
-                            print(f'[INFO] 当前页面: {current_url}，继续获取 cookies...')
-
-                    # 获取所有 cookies
-                    cookies = await page.context.cookies()
-
-                    # 提取关键 cookies
-                    session_cookie = None
-                    waf_cookies = {}
-                    api_user = None
-
-                    for cookie in cookies:
-                        cookie_name = cookie.get('name')
-                        cookie_value = cookie.get('value')
-
-                        if cookie_name == 'session':
-                            session_cookie = cookie_value
-                        elif cookie_name in ['acw_tc', 'cdn_sec_tc', 'acw_sc__v2']:
-                            waf_cookies[cookie_name] = cookie_value
-
-                    if not session_cookie:
-                        print(f'[ERROR] 未获取到 session cookie')
-                        await context.close()
-                        return None
-
-                    # 尝试从页面获取 user ID
-                    try:
-                        # 访问 API 获取用户信息
-                        user_info_response = await page.evaluate('''
-                            async () => {
-                                const response = await fetch('/api/user/self');
-                                return await response.json();
-                            }
-                        ''')
-
-                        if user_info_response and user_info_response.get('success'):
-                            api_user = str(user_info_response.get('data', {}).get('id', ''))
-                            print(f'[SUCCESS] 获取到 User ID: {api_user}')
-                    except Exception as e:
-                        print(f'[WARN] 无法获取 User ID: {e}')
-
-                    await context.close()
-
-                    # 构建返回结果
-                    all_cookies = {'session': session_cookie, **waf_cookies}
-
-                    return {
-                        'cookies': all_cookies,
-                        'api_user': api_user or ''
-                    }
-
-                except Exception as e:
-                    print(f'[ERROR] 登录过程出错: {e}')
-                    return None
 
     async def _do_anyrouter_checkin(self, account_name: str, cookies: Dict, api_user: str) -> tuple:
         """执行 AnyRouter 签到请求"""

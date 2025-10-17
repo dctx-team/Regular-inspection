@@ -41,18 +41,7 @@
    ]
    ```
 
-   **AgentRouter 配置（推荐使用账号密码）：**
-   ```json
-   AGENTROUTER_ACCOUNTS=[
-     {
-       "name": "AgentRouter主账号",
-       "email": "your_email@example.com",
-       "password": "your_password"
-     }
-   ]
-   ```
-
-   或使用传统 Cookie 方式：
+   **AgentRouter 配置：**
    ```json
    AGENTROUTER_ACCOUNTS=[
      {
@@ -123,25 +112,17 @@ docker-compose run --rm router-checkin
 
 ### 账号配置方式
 
-#### AgentRouter（推荐：账号密码登录）
+#### AnyRouter / AgentRouter（Cookie 方式）
 
-**为什么推荐账号密码？**
-- AgentRouter 会定期重启服务器，导致 Cookie 失效
-- 账号密码登录可以自动获取新的 Session，无需手动更新
-
-**配置示例：**
-```json
-{
-  "name": "AgentRouter主账号",
-  "email": "your_email@example.com",
-  "password": "your_password"
-}
-```
-
-#### AnyRouter / AgentRouter（传统：Cookie 方式）
+**重要提示：**
+- AgentRouter 使用 GitHub/LinuxDO OAuth 登录
+- 服务器重启会导致 Session 失效，需要重新获取 Cookie
+- 建议定期（每月）更新一次 Cookie
 
 1. **获取 Session Cookie：**
    - 打开浏览器，访问网站并登录
+     - AnyRouter: 使用邮箱密码登录
+     - AgentRouter: 点击"使用 GitHub 继续"或"使用 LinuxDO 继续"
    - 按 F12 打开开发者工具
    - 切换到 `Application` → `Cookies`
    - 找到 `session` 字段，复制其值
@@ -149,7 +130,8 @@ docker-compose run --rm router-checkin
 2. **获取 API User ID：**
    - 开发者工具切换到 `Network` 标签
    - 刷新页面或进行操作
-   - 找到任意请求，查看请求头中的 `New-Api-User` 字段值
+   - 找到任意 API 请求，查看请求头中的 `New-Api-User` 字段值
+   - 或者查看控制台页面 URL 中的数字ID
 
 **配置示例：**
 ```json

@@ -44,14 +44,9 @@ def load_accounts(env_var_name: str) -> Optional[List[Dict]]:
                 print(f'[ERROR] {env_var_name} 账号 {i+1} 格式错误')
                 return None
 
-            # 检查登录方式：要么提供 cookies+api_user，要么提供 email+password
-            has_cookies = 'cookies' in account and 'api_user' in account
-            has_password = 'email' in account and 'password' in account
-
-            if not has_cookies and not has_password:
-                print(f'[ERROR] {env_var_name} 账号 {i+1} 必须提供以下之一：')
-                print(f'       方式1: cookies + api_user (传统方式)')
-                print(f'       方式2: email + password (账号密码登录，推荐用于 AgentRouter)')
+            # 必填字段
+            if 'cookies' not in account or 'api_user' not in account:
+                print(f'[ERROR] {env_var_name} 账号 {i+1} 缺少必填字段 (cookies, api_user)')
                 return None
 
             # name 字段可选，但不能为空
