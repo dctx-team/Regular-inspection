@@ -291,33 +291,146 @@ class RouterCheckin:
 
                     page = await context.new_page()
 
-                    # 访问登录页面
-                    print(f'[INFO] 访问登录页面...')
-                    await page.goto('https://agentrouter.org/login', wait_until='domcontentloaded', timeout=30000)
-                    await page.wait_for_timeout(2000)
+                    # 尝试多个 URL 访问登录页面
+                    login_urls = [
+                        'https://agentrouter.org/login',
+                        'https://agentrouter.org/#/login',
+                        'https://agentrouter.org'
+                    ]
+
+                    login_success = False
+                    for url in login_urls:
+                        try:
+                            print(f'[INFO] 尝试访问: {url}')
+                            await page.goto(url, wait_until='domcontentloaded', timeout=20000)
+                            await page.wait_for_timeout(2000)
+
+                            # 检查是否有登录表单
+                            email_input = await page.query_selector('input[type="email"], input[name="email"], input[placeholder*="邮箱"], input[placeholder*="Email"], input[placeholder*="email"]')
+                            if email_input:
+                                login_success = True
+                                print(f'[SUCCESS] 成功访问登录页面')
+                                break
+                        except Exception as e:
+                            print(f'[WARN] {url} 访问失败: {str(e)[:50]}')
+                            continue
+
+                    if not login_success:
+                        print(f'[ERROR] 所有登录页面 URL 均访问失败')
+                        await context.close()
+                        return None
 
                     # 填写登录表单
-                    print(f'[INFO] 填写登录信息...')
-                    await page.fill('input[type="email"], input[name="email"], input[placeholder*="邮箱"], input[placeholder*="Email"]', email)
-                    await page.fill('input[type="password"], input[name="password"]', password)
-                    await page.wait_for_timeout(1000)
+                    try:
+                        print(f'[INFO] 填写登录信息...')
+
+                        # 查找邮箱输入框
+                        email_selectors = [
+                            'input[type="email"]',
+                            'input[name="email"]',
+                            'input[placeholder*="邮箱"]',
+                            'input[placeholder*="Email"]',
+                            'input[placeholder*="email"]'
+                        ]
+
+                        email_filled = False
+                        for selector in email_selectors:
+                            try:
+                                await page.fill(selector, email, timeout=3000)
+                                email_filled = True
+                                print(f'[DEBUG] 邮箱输入框定位成功: {selector}')
+                                break
+                            except:
+                                continue
+
+                        if not email_filled:
+                            print(f'[ERROR] 无法找到邮箱输入框')
+                            await context.close()
+                            return None
+
+                        # 查找密码输入框
+                        password_selectors = [
+                            'input[type="password"]',
+                            'input[name="password"]'
+                        ]
+
+                        password_filled = False
+                        for selector in password_selectors:
+                            try:
+                                await page.fill(selector, password, timeout=3000)
+                                password_filled = True
+                                print(f'[DEBUG] 密码输入框定位成功: {selector}')
+                                break
+                            except:
+                                continue
+
+                        if not password_filled:
+                            print(f'[ERROR] 无法找到密码输入框')
+                            await context.close()
+                            return None
+
+                        await page.wait_for_timeout(1000)
+
+                    except Exception as e:
+                        print(f'[ERROR] 填写表单失败: {e}')
+                        await context.close()
+                        return None
 
                     # 点击登录按钮
-                    print(f'[INFO] 提交登录...')
-                    await page.click('button[type="submit"], button:has-text("登录"), button:has-text("Login")')
+                    try:
+                        print(f'[INFO] 提交登录...')
+
+                        login_button_selectors = [
+                            'button[type="submit"]',
+                            'button:has-text("登录")',
+                            'button:has-text("Login")',
+                            'button:has-text("Sign in")',
+                            'button.login-button',
+                            'input[type="submit"]'
+                        ]
+
+                        button_clicked = False
+                        for selector in login_button_selectors:
+                            try:
+                                await page.click(selector, timeout=3000)
+                                button_clicked = True
+                                print(f'[DEBUG] 登录按钮点击成功: {selector}')
+                                break
+                            except:
+                                continue
+
+                        if not button_clicked:
+                            print(f'[ERROR] 无法找到登录按钮')
+                            await context.close()
+                            return None
+
+                    except Exception as e:
+                        print(f'[ERROR] 点击登录按钮失败: {e}')
+                        await context.close()
+                        return None
 
                     # 等待登录完成（等待跳转或特定元素出现）
                     try:
-                        await page.wait_for_url('**/console**', timeout=10000)
+                        print(f'[INFO] 等待登录完成...')
+                        await page.wait_for_url('**/console**', timeout=15000)
                         print(f'[SUCCESS] 登录成功，已跳转到控制台')
                     except Exception:
                         # 如果没有跳转，等待一下再检查
-                        await page.wait_for_timeout(3000)
+                        await page.wait_for_timeout(5000)
                         current_url = page.url
-                        if 'login' in current_url.lower():
-                            print(f'[ERROR] 登录失败，仍在登录页面')
+
+                        # 检查是否仍在登录页面
+                        if '/login' in current_url or '#/login' in current_url:
+                            # 检查是否有错误提示
+                            try:
+                                error_msg = await page.text_content('.error-message, .alert-danger, [class*="error"]', timeout=2000)
+                                print(f'[ERROR] 登录失败: {error_msg}')
+                            except:
+                                print(f'[ERROR] 登录失败，仍在登录页面: {current_url}')
                             await context.close()
                             return None
+                        else:
+                            print(f'[INFO] 当前页面: {current_url}，继续获取 cookies...')
 
                     # 获取所有 cookies
                     cookies = await page.context.cookies()
