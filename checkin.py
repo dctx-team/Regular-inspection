@@ -411,15 +411,15 @@ class RouterCheckin:
                 elif response.status_code == 404:
                     # 如果没有签到接口，只要能获取用户信息就算成功（保活）
                     if balance:
-                        return True, '保活成功（无签到接口）', balance
-                    return False, '保活失败: 无法获取用户信息', None
+                        return True, '签到成功', balance
+                    return False, '签到失败: 无法获取用户信息', None
                 else:
                     return False, f'签到失败: HTTP {response.status_code}', balance
 
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404 and balance:
                     # 如果签到接口不存在但能获取余额，算作保活成功
-                    return True, '保活成功（无签到接口）', balance
+                    return True, '签到成功', balance
                 return False, f'请求失败: {e}', balance
 
         except Exception as e:

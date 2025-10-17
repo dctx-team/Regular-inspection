@@ -122,28 +122,68 @@ async def notify_results(results, success_count, failed_count):
     """发送通知"""
     print('\n[INFO] 准备发送通知...')
 
+    # 统计余额信息
+    total_quota = 0
+    total_used = 0
+    platform_stats = {
+        'AnyRouter': {'count': 0, 'success': 0, 'failed': 0, 'quota': 0, 'used': 0},
+        'AgentRouter': {'count': 0, 'success': 0, 'failed': 0, 'quota': 0, 'used': 0}
+    }
+
+    for result in results:
+        platform = result['platform']
+        platform_stats[platform]['count'] += 1
+
+        if result['success']:
+            platform_stats[platform]['success'] += 1
+        else:
+            platform_stats[platform]['failed'] += 1
+
+        # 累计余额
+        if result.get('balance'):
+            balance = result['balance']
+            total_quota += balance["quota"]
+            total_used += balance["used"]
+            platform_stats[platform]['quota'] += balance["quota"]
+            platform_stats[platform]['used'] += balance["used"]
+
     # 构建通知内容
     title = 'Router平台签到提醒'
 
     content_lines = [
         f'⏰ 执行时间: {get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")} (北京时间)',
         '',
-        f'📊 统计结果:',
-        f'✓ 成功: {success_count} 个',
-        f'✗ 失败: {failed_count} 个',
-        '',
-        '📝 详细结果:'
+        f'📊 统计结果: ✓ 成功: {success_count} 个 ✗ 失败: {failed_count} 个',
     ]
+
+    # 添加详细结果
+    content_lines.append('')
+    content_lines.append('📝 详细结果:')
 
     for result in results:
         icon = '✅' if result['success'] else '❌'
-        content_lines.append(f'{icon} [{result["platform"]}] {result["name"]}')
-        content_lines.append(f'   {result["message"]}')
+        content_lines.append(f'{icon} [{result["platform"]}] {result["name"]} {result["message"]}')
 
         # 添加余额信息
         if result.get('balance'):
             balance = result['balance']
             content_lines.append(f'   💰 余额: ${balance["quota"]}, 已用: ${balance["used"]}')
+
+    # 添加平台汇总
+    for platform, stats in platform_stats.items():
+        if stats['count'] > 0:
+            content_lines.append('')
+            content_lines.append(f'─── {platform} 平台汇总 ───')
+            content_lines.append(f'✓ 成功: {stats["success"]} 个 | ✗ 失败: {stats["failed"]} 个')
+            if stats['quota'] > 0 or stats['used'] > 0:
+                content_lines.append(f'💰 总余额: ${stats["quota"]:.2f}, 总已用: ${stats["used"]:.2f}')
+
+    # 全平台汇总
+    if total_quota > 0 or total_used > 0:
+        content_lines.append('')
+        content_lines.append('━━━ 全平台汇总 ━━━')
+        content_lines.append(f'💰 总余额: ${total_quota:.2f}')
+        content_lines.append(f'📊 总已用: ${total_used:.2f}')
 
     content = '\n'.join(content_lines)
 
