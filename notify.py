@@ -33,35 +33,80 @@ class NotificationKit:
 			msg['To'] = self.email_to
 			msg['Subject'] = title
 
-			# 自动检测 SMTP 服务器
-			if self.smtp_server:
-				smtp_host = self.smtp_server
-			else:
-				domain = self.email_user.split('@')[1]
-				smtp_host = f'smtp.{domain}'
+			# 智能检测 SMTP 服务器
+			smtp_host = None
+			smtp_port = 465
+			use_ssl = True
 
-			# 尝试 SSL 连接 (端口 465)
-			try:
-				with smtplib.SMTP_SSL(smtp_host, 465, timeout=30) as server:
-					server.login(self.email_user, self.email_pass)
-					server.send_message(msg)
-			except Exception as ssl_error:
-				# 如果 SSL 失败，尝试 STARTTLS (端口 587)
-				print(f'[DEBUG] SSL (465) 连接失败，尝试 STARTTLS (587): {ssl_error}')
-				with smtplib.SMTP(smtp_host, 587, timeout=30) as server:
+			if self.smtp_server and self.smtp_server.strip():
+				# 用户指定了自定义服务器
+				smtp_host = self.smtp_server.strip()
+			else:
+				# 自动检测邮箱服务商
+				domain = self.email_user.split('@')[1].lower()
+
+				# 常见邮箱服务商配置
+				email_providers = {
+					'qq.com': ('smtp.qq.com', 465, True),
+					'vip.qq.com': ('smtp.qq.com', 465, True),
+					'foxmail.com': ('smtp.qq.com', 465, True),
+					'163.com': ('smtp.163.com', 465, True),
+					'126.com': ('smtp.126.com', 465, True),
+					'yeah.net': ('smtp.yeah.net', 465, True),
+					'gmail.com': ('smtp.gmail.com', 587, False),
+					'outlook.com': ('smtp.office365.com', 587, False),
+					'hotmail.com': ('smtp.office365.com', 587, False),
+					'live.com': ('smtp.office365.com', 587, False),
+					'sina.com': ('smtp.sina.com', 465, True),
+					'sina.cn': ('smtp.sina.cn', 465, True),
+					'sohu.com': ('smtp.sohu.com', 465, True),
+					'139.com': ('smtp.139.com', 465, True),
+					'189.cn': ('smtp.189.cn', 465, True),
+				}
+
+				if domain in email_providers:
+					smtp_host, smtp_port, use_ssl = email_providers[domain]
+					print(f'[DEBUG] 检测到邮箱服务商: {domain} -> {smtp_host}:{smtp_port}')
+				else:
+					# 默认使用标准格式
+					smtp_host = f'smtp.{domain}'
+					print(f'[DEBUG] 使用默认 SMTP 服务器: {smtp_host}')
+
+			# 尝试连接并发送
+			if use_ssl:
+				# 尝试 SSL (465)
+				try:
+					with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as server:
+						server.login(self.email_user, self.email_pass)
+						server.send_message(msg)
+						print(f'[DEBUG] 邮件发送成功 via SSL:{smtp_port}')
+				except Exception as ssl_error:
+					# SSL 失败，尝试 STARTTLS (587)
+					print(f'[DEBUG] SSL ({smtp_port}) 连接失败，尝试 STARTTLS (587): {ssl_error}')
+					with smtplib.SMTP(smtp_host, 587, timeout=30) as server:
+						server.starttls()
+						server.login(self.email_user, self.email_pass)
+						server.send_message(msg)
+						print(f'[DEBUG] 邮件发送成功 via STARTTLS:587')
+			else:
+				# 使用 STARTTLS
+				with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
 					server.starttls()
 					server.login(self.email_user, self.email_pass)
 					server.send_message(msg)
+					print(f'[DEBUG] 邮件发送成功 via STARTTLS:{smtp_port}')
 
 		except Exception as e:
 			# 提供更详细的错误信息
 			error_msg = str(e)
 			if 'authentication failed' in error_msg.lower() or 'auth' in error_msg.lower():
-				raise ValueError(f'邮箱认证失败，请检查邮箱地址和授权码: {error_msg}')
+				raise ValueError(f'邮箱认证失败，请检查邮箱地址和授权码')
 			elif 'timeout' in error_msg.lower():
-				raise ValueError(f'SMTP 服务器连接超时，请检查网络: {error_msg}')
+				raise ValueError(f'SMTP 服务器连接超时，请检查网络或尝试其他端口')
+			elif 'name or service not known' in error_msg.lower():
+				raise ValueError(f'SMTP 服务器地址无法解析: {smtp_host}，请检查 CUSTOM_SMTP_SERVER 配置或邮箱地址')
 			elif 'connection refused' in error_msg.lower():
-				raise ValueError(f'SMTP 服务器拒绝连接，请检查服务器地址: {smtp_host}')
+				raise ValueError(f'SMTP 服务器拒绝连接: {smtp_host}:{smtp_port}')
 			else:
 				raise ValueError(f'邮件发送失败: {error_msg}')
 
