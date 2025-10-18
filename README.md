@@ -56,9 +56,9 @@
 
 3. **配置通知（推荐：ServerChan）**
 
-   **ServerChan（推荐）** - 微信通知，配置简单稳定
+   **[ServerChan](https://sct.ftqq.com/r/18665)（推荐）** - 微信通知，配置简单稳定
 
-   a. 访问 https://sct.ftqq.com/r/18665 使用微信登录
+   a. 访问 [ServerChan](https://sct.ftqq.com/r/18665) 使用微信登录
 
    b. 复制你的 SendKey（格式：`SCTxxxxx...`）
 
@@ -163,7 +163,7 @@ docker-compose run --rm router-checkin
 | `EMAIL_PASS` | 邮件密码/授权码 | 否 |
 | `EMAIL_TO` | 邮件接收地址 | 否 |
 | `CUSTOM_SMTP_SERVER` | 自定义 SMTP 服务器（通常不需要） | 否 |
-| `SERVERPUSHKEY` | Server酱 SendKey（推荐，访问 https://sct.ftqq.com/r/18665 获取） | 否 |
+| `SERVERPUSHKEY` | Server酱 SendKey（推荐，访问 [ServerChan](https://sct.ftqq.com/r/18665) 获取） | 否 |
 | `PUSHPLUS_TOKEN` | PushPlus Token | 否 |
 | `DINGDING_WEBHOOK` | 钉钉机器人 Webhook | 否 |
 | `FEISHU_WEBHOOK` | 飞书机器人 Webhook | 否 |

@@ -73,9 +73,9 @@
 
 #### 通知配置（推荐：ServerChan）
 
-**推荐：ServerChan** - 微信通知，配置简单稳定
+**推荐：[ServerChan](https://sct.ftqq.com/r/18665)** - 微信通知，配置简单稳定
 
-1. 访问 https://sct.ftqq.com/r/18665
+1. 访问 [ServerChan](https://sct.ftqq.com/r/18665)
 2. 使用微信扫码登录
 3. 复制你的 SendKey
 4. 在 GitHub Secrets 中添加 `SERVERPUSHKEY`
