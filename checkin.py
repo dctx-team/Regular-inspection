@@ -471,6 +471,8 @@ class RouterCheckin:
         try:
             with open(BALANCE_DATA_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.current_balances, f, ensure_ascii=False, indent=2)
+            print(f'[INFO] 余额数据已保存到 {BALANCE_DATA_FILE}')
+            print(f'[INFO] 保存了 {len(self.current_balances)} 个账号的余额数据')
         except Exception as e:
             print(f'[WARN] 保存余额数据失败: {e}')
 
@@ -550,6 +552,7 @@ class RouterCheckin:
         try:
             with open(BALANCE_HASH_FILE, 'w') as f:
                 f.write(balance_hash)
+            print(f'[INFO] 余额哈希已保存到 {BALANCE_HASH_FILE}: {balance_hash}')
         except Exception as e:
             print(f'[WARN] 保存余额哈希失败: {e}')
 
