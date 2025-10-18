@@ -54,15 +54,24 @@
    ]
    ```
 
-3. **配置通知（可选）**
+3. **配置通知（推荐：ServerChan）**
 
-   添加以下任一通知方式的环境变量：
-   - `EMAIL_USER` + `EMAIL_PASS` + `EMAIL_TO` - 邮件通知
+   **ServerChan（推荐）** - 微信通知，配置简单稳定
+
+   a. 访问 https://sct.ftqq.com/r/18665 使用微信登录
+
+   b. 复制你的 SendKey（格式：`SCTxxxxx...`）
+
+   c. 在 GitHub Secrets 中添加：
+      - Name: `SERVERPUSHKEY`
+      - Value: 你的 SendKey
+
+   **其他通知方式（可选）**：
+   - `EMAIL_USER` + `EMAIL_PASS` + `EMAIL_TO` - 邮件通知（GitHub Actions 可能不稳定）
    - `DINGDING_WEBHOOK` - 钉钉机器人
    - `FEISHU_WEBHOOK` - 飞书机器人
    - `WEIXIN_WEBHOOK` - 企业微信
    - `PUSHPLUS_TOKEN` - PushPlus
-   - `SERVERPUSHKEY` - Server酱
 
 4. **启用 Actions**
 
@@ -153,11 +162,12 @@ docker-compose run --rm router-checkin
 | `EMAIL_USER` | 邮件发送地址 | 否 |
 | `EMAIL_PASS` | 邮件密码/授权码 | 否 |
 | `EMAIL_TO` | 邮件接收地址 | 否 |
+| `CUSTOM_SMTP_SERVER` | 自定义 SMTP 服务器（通常不需要） | 否 |
+| `SERVERPUSHKEY` | Server酱 SendKey（推荐，访问 https://sct.ftqq.com/r/18665 获取） | 否 |
+| `PUSHPLUS_TOKEN` | PushPlus Token | 否 |
 | `DINGDING_WEBHOOK` | 钉钉机器人 Webhook | 否 |
 | `FEISHU_WEBHOOK` | 飞书机器人 Webhook | 否 |
 | `WEIXIN_WEBHOOK` | 企业微信 Webhook | 否 |
-| `PUSHPLUS_TOKEN` | PushPlus Token | 否 |
-| `SERVERPUSHKEY` | Server酱 SendKey | 否 |
 
 ## 定时设置
 

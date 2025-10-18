@@ -71,16 +71,22 @@
 ]
 ```
 
-#### 通知配置（可选）
+#### 通知配置（推荐：ServerChan）
 
-根据需要添加以下任一通知方式：
+**推荐：ServerChan** - 微信通知，配置简单稳定
 
-- **邮件通知：** `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_TO`
+1. 访问 https://sct.ftqq.com/r/18665
+2. 使用微信扫码登录
+3. 复制你的 SendKey
+4. 在 GitHub Secrets 中添加 `SERVERPUSHKEY`
+
+**其他通知方式：**
+
+- **邮件通知：** `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_TO`（注意：GitHub Actions 环境可能不稳定）
 - **钉钉：** `DINGDING_WEBHOOK`
 - **飞书：** `FEISHU_WEBHOOK`
 - **企业微信：** `WEIXIN_WEBHOOK`
 - **PushPlus：** `PUSHPLUS_TOKEN`
-- **Server酱：** `SERVERPUSHKEY`
 
 ### 步骤 4: 启用 Actions
 
@@ -220,6 +226,34 @@ schedule:
 ```
 
 ## 🔔 通知配置
+
+### ServerChan（推荐）
+
+**优势：**
+- ✅ 微信直接接收，无需额外 APP
+- ✅ 配置简单，只需 1 个密钥
+- ✅ 稳定可靠，专为 GitHub Actions 设计
+- ✅ 免费额度充足（5000次/天）
+
+**配置步骤：**
+
+1. **获取 SendKey**
+   - 访问：https://sct.ftqq.com/r/18665
+   - 使用微信扫码登录
+   - 点击 "SendKey" 菜单
+   - 复制你的 SendKey（格式：`SCTxxxxx...`）
+
+2. **配置 GitHub Secret**
+   - 仓库 Settings → Secrets → Actions
+   - 点击 New repository secret
+   - Name: `SERVERPUSHKEY`
+   - Value: 粘贴你的 SendKey
+   - 点击 Add secret
+
+3. **测试**
+   - Actions → Router 自动签到 → Run workflow
+   - 等待运行完成
+   - 打开微信，查看 "Server酱" 公众号消息
 
 ### 钉钉机器人
 
