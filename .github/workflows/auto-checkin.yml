@@ -59,11 +59,31 @@ jobs:
       - name: 提交余额数据
         if: always()
         run: |
+          echo "=== 检查余额数据文件 ==="
+          ls -lh balance_data.json balance_hash.txt || echo "文件不存在"
+
+          echo "=== 配置 Git ==="
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add balance_data.json balance_hash.txt || true
-          git diff --staged --quiet || git commit -m "自动更新余额数据 [skip ci]" || true
-          git push || true
+
+          echo "=== 检查 Git 状态 ==="
+          git status
+
+          echo "=== 添加文件到暂存区 ==="
+          git add balance_data.json balance_hash.txt || echo "添加文件失败"
+
+          echo "=== 检查暂存区 ==="
+          git diff --staged --name-only
+
+          echo "=== 提交更改 ==="
+          if ! git diff --staged --quiet; then
+            git commit -m "自动更新余额数据 [skip ci]"
+            echo "=== 推送到远程 ==="
+            git push
+            echo "✅ 余额数据已提交并推送"
+          else
+            echo "⚠️ 没有需要提交的更改"
+          fi
 
       - name: 上传余额记录（备份）
         uses: actions/upload-artifact@v4
