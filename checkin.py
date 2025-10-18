@@ -525,13 +525,13 @@ class RouterCheckin:
 
             # 显示充值
             if total_recharge > 0:
-                print(f'  💳 本期充值: +${total_recharge:.2f} (总充值: ${last_total:.2f} → ${current_total:.2f})')
+                print(f'  💳 本期增加: +${total_recharge:.2f} (总充值: ${last_total:.2f} → ${current_total:.2f})')
             elif total_recharge < 0:
                 print(f'  ⚠️  总充值减少: ${total_recharge:.2f} (${last_total:.2f} → ${current_total:.2f})')
 
             # 显示消费
             if used_change > 0:
-                print(f'  📊 本期消费: +${used_change:.2f} (已用: ${last_used:.2f} → ${current_used:.2f})')
+                print(f'  📊 本期使用: +${used_change:.2f} (已用: ${last_used:.2f} → ${current_used:.2f})')
             elif used_change < 0:
                 print(f'  🔄 已用减少: ${used_change:.2f} (${last_used:.2f} → ${current_used:.2f})')
 

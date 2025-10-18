@@ -191,14 +191,14 @@ async def notify_results(results, success_count, failed_count):
             change_items = []
             if change['recharge'] != 0:
                 if change['recharge'] > 0:
-                    change_items.append(f'充值+${change["recharge"]:.2f}')
+                    change_items.append(f'增加+${change["recharge"]:.2f}')
                 else:
-                    change_items.append(f'充值${change["recharge"]:.2f}')
+                    change_items.append(f'增加${change["recharge"]:.2f}')
             if change['used_change'] != 0:
                 if change['used_change'] > 0:
-                    change_items.append(f'消费+${change["used_change"]:.2f}')
+                    change_items.append(f'使用+${change["used_change"]:.2f}')
                 else:
-                    change_items.append(f'消费${change["used_change"]:.2f}')
+                    change_items.append(f'使用${change["used_change"]:.2f}')
             if change['quota_change'] != 0:
                 if change['quota_change'] > 0:
                     change_items.append(f'可用+${change["quota_change"]:.2f}')
@@ -221,9 +221,9 @@ async def notify_results(results, success_count, failed_count):
             if stats['recharge'] != 0 or stats['used_change'] != 0 or stats['quota_change'] != 0:
                 change_parts = []
                 if stats['recharge'] != 0:
-                    change_parts.append(f'充值{"+" if stats["recharge"] > 0 else ""}${stats["recharge"]:.2f}')
+                    change_parts.append(f'增加{"+" if stats["recharge"] > 0 else ""}${stats["recharge"]:.2f}')
                 if stats['used_change'] != 0:
-                    change_parts.append(f'消费{"+" if stats["used_change"] > 0 else ""}${stats["used_change"]:.2f}')
+                    change_parts.append(f'使用{"+" if stats["used_change"] > 0 else ""}${stats["used_change"]:.2f}')
                 if stats['quota_change'] != 0:
                     change_parts.append(f'可用{"+" if stats["quota_change"] > 0 else ""}${stats["quota_change"]:.2f}')
                 content_lines.append(f'📈 本期变动: {", ".join(change_parts)}')
@@ -239,9 +239,9 @@ async def notify_results(results, success_count, failed_count):
         if total_recharge != 0 or total_used_change != 0 or total_quota_change != 0:
             change_parts = []
             if total_recharge != 0:
-                change_parts.append(f'充值{"+" if total_recharge > 0 else ""}${total_recharge:.2f}')
+                change_parts.append(f'增加{"+" if total_recharge > 0 else ""}${total_recharge:.2f}')
             if total_used_change != 0:
-                change_parts.append(f'消费{"+" if total_used_change > 0 else ""}${total_used_change:.2f}')
+                change_parts.append(f'使用{"+" if total_used_change > 0 else ""}${total_used_change:.2f}')
             if total_quota_change != 0:
                 change_parts.append(f'可用{"+" if total_quota_change > 0 else ""}${total_quota_change:.2f}')
             content_lines.append(f'📈 本期变动: {", ".join(change_parts)}')
