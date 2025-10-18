@@ -480,7 +480,7 @@ class RouterCheckin:
         逻辑说明：
         - quota: 可用余额
         - used: 已用额度
-        - 账户总充值 = quota + used
+        - 账户总额度 = quota + used
 
         返回：
         - None: 首次记录或无变化
@@ -496,12 +496,12 @@ class RouterCheckin:
         current_quota = current_balance['quota']    # 当前可用余额
         current_used = current_balance['used']      # 当前已用
 
-        # 计算总充值变化
-        last_total = last_quota + last_used      # 上次总充值
-        current_total = current_quota + current_used  # 当前总充值
-        total_recharge = current_total - last_total   # 新充值金额
+        # 计算总额度变化
+        last_total = last_quota + last_used      # 上次总额度
+        current_total = current_quota + current_used  # 当前总额度
+        total_recharge = current_total - last_total   # 新增加金额
 
-        # 计算消费变化
+        # 计算使用变化
         used_change = current_used - last_used
 
         # 计算可用余额变化
@@ -523,13 +523,13 @@ class RouterCheckin:
                 'current_used': current_used
             }
 
-            # 显示充值
+            # 显示增加
             if total_recharge > 0:
-                print(f'  💳 本期增加: +${total_recharge:.2f} (总充值: ${last_total:.2f} → ${current_total:.2f})')
+                print(f'  💳 本期增加: +${total_recharge:.2f} (总额度: ${last_total:.2f} → ${current_total:.2f})')
             elif total_recharge < 0:
-                print(f'  ⚠️  总充值减少: ${total_recharge:.2f} (${last_total:.2f} → ${current_total:.2f})')
+                print(f'  ⚠️  总额度减少: ${total_recharge:.2f} (${last_total:.2f} → ${current_total:.2f})')
 
-            # 显示消费
+            # 显示使用
             if used_change > 0:
                 print(f'  📊 本期使用: +${used_change:.2f} (已用: ${last_used:.2f} → ${current_used:.2f})')
             elif used_change < 0:
