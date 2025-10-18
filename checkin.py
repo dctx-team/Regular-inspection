@@ -143,7 +143,7 @@ class RouterCheckin:
             return self._make_result(platform, account_name, False, error_msg)
 
     async def checkin_agentrouter(self, account: Dict, index: int) -> Dict:
-        """AgentRouter 签到/保活"""
+        """AgentRouter 签到"""
         platform = 'AgentRouter'
         account_name = account.get('name', f'AgentRouter账号{index+1}')
 
@@ -411,7 +411,7 @@ class RouterCheckin:
                         msg = result.get('msg', result.get('message', '未知错误'))
                         return False, f'签到失败: {msg}', balance
                 elif response.status_code == 404:
-                    # 如果没有签到接口，只要能获取用户信息就算成功（保活）
+                    # 如果没有签到接口，只要能获取用户信息就算成功
                     if balance:
                         return True, '签到成功', balance
                     return False, '签到失败: 无法获取用户信息', None
@@ -420,7 +420,7 @@ class RouterCheckin:
 
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404 and balance:
-                    # 如果签到接口不存在但能获取余额，算作保活成功
+                    # 如果签到接口不存在但能获取余额，算作签到成功
                     return True, '签到成功', balance
                 return False, f'请求失败: {e}', balance
 
