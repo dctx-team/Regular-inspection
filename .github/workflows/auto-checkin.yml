@@ -17,6 +17,8 @@ jobs:
   checkin:
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: write  # 允许提交和推送更改
 
     steps:
       - name: 检出代码
