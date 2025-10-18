@@ -569,15 +569,23 @@ class RouterCheckin:
 
         current_hash = self._generate_balance_hash(self.current_balances)
 
-        if self.last_balance_hash is None:
-            # 首次运行
+        # 判断是否首次运行
+        is_first_run = (self.last_balance_hash is None and not self.last_balance_data)
+
+        if is_first_run:
+            # 真正的首次运行（既没有 hash 也没有余额数据）
             self.balance_changed = True
             print('[INFO] 首次运行，记录当前余额')
+        elif self.last_balance_hash is None:
+            # 有余额数据但没有 hash（可能是旧版本升级）
+            self.balance_changed = True
+            print('[INFO] 重新生成余额哈希')
         elif current_hash != self.last_balance_hash:
             # 余额变化
             self.balance_changed = True
             print('[INFO] 检测到余额变化')
         else:
+            # 余额无变化
             self.balance_changed = False
             print('[INFO] 余额无变化')
 
