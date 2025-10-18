@@ -122,12 +122,18 @@ async def notify_results(results, success_count, failed_count):
     """发送通知"""
     print('\n[INFO] 准备发送通知...')
 
-    # 统计余额信息
+    # 统计余额信息和变动
     total_quota = 0
     total_used = 0
+    total_recharge = 0
+    total_used_change = 0
+    total_quota_change = 0
+
     platform_stats = {
-        'AnyRouter': {'count': 0, 'success': 0, 'failed': 0, 'quota': 0, 'used': 0},
-        'AgentRouter': {'count': 0, 'success': 0, 'failed': 0, 'quota': 0, 'used': 0}
+        'AnyRouter': {'count': 0, 'success': 0, 'failed': 0, 'quota': 0, 'used': 0,
+                      'recharge': 0, 'used_change': 0, 'quota_change': 0},
+        'AgentRouter': {'count': 0, 'success': 0, 'failed': 0, 'quota': 0, 'used': 0,
+                        'recharge': 0, 'used_change': 0, 'quota_change': 0}
     }
 
     for result in results:
@@ -146,6 +152,16 @@ async def notify_results(results, success_count, failed_count):
             total_used += balance["used"]
             platform_stats[platform]['quota'] += balance["quota"]
             platform_stats[platform]['used'] += balance["used"]
+
+        # 累计变动
+        if result.get('balance_change'):
+            change = result['balance_change']
+            total_recharge += change['recharge']
+            total_used_change += change['used_change']
+            total_quota_change += change['quota_change']
+            platform_stats[platform]['recharge'] += change['recharge']
+            platform_stats[platform]['used_change'] += change['used_change']
+            platform_stats[platform]['quota_change'] += change['quota_change']
 
     # 构建通知内容
     title = 'Router平台签到提醒'
@@ -169,6 +185,29 @@ async def notify_results(results, success_count, failed_count):
             balance = result['balance']
             content_lines.append(f'   💰 余额: ${balance["quota"]}, 已用: ${balance["used"]}')
 
+        # 添加变动信息
+        if result.get('balance_change'):
+            change = result['balance_change']
+            change_items = []
+            if change['recharge'] != 0:
+                if change['recharge'] > 0:
+                    change_items.append(f'充值+${change["recharge"]:.2f}')
+                else:
+                    change_items.append(f'充值${change["recharge"]:.2f}')
+            if change['used_change'] != 0:
+                if change['used_change'] > 0:
+                    change_items.append(f'消费+${change["used_change"]:.2f}')
+                else:
+                    change_items.append(f'消费${change["used_change"]:.2f}')
+            if change['quota_change'] != 0:
+                if change['quota_change'] > 0:
+                    change_items.append(f'可用+${change["quota_change"]:.2f}')
+                else:
+                    change_items.append(f'可用${change["quota_change"]:.2f}')
+
+            if change_items:
+                content_lines.append(f'   📈 变动: {", ".join(change_items)}')
+
     # 添加平台汇总
     for platform, stats in platform_stats.items():
         if stats['count'] > 0:
@@ -178,12 +217,34 @@ async def notify_results(results, success_count, failed_count):
             if stats['quota'] > 0 or stats['used'] > 0:
                 content_lines.append(f'💰 总余额: ${stats["quota"]:.2f}, 总已用: ${stats["used"]:.2f}')
 
+            # 添加平台变动汇总
+            if stats['recharge'] != 0 or stats['used_change'] != 0 or stats['quota_change'] != 0:
+                change_parts = []
+                if stats['recharge'] != 0:
+                    change_parts.append(f'充值{"+" if stats["recharge"] > 0 else ""}${stats["recharge"]:.2f}')
+                if stats['used_change'] != 0:
+                    change_parts.append(f'消费{"+" if stats["used_change"] > 0 else ""}${stats["used_change"]:.2f}')
+                if stats['quota_change'] != 0:
+                    change_parts.append(f'可用{"+" if stats["quota_change"] > 0 else ""}${stats["quota_change"]:.2f}')
+                content_lines.append(f'📈 本期变动: {", ".join(change_parts)}')
+
     # 全平台汇总
     if total_quota > 0 or total_used > 0:
         content_lines.append('')
         content_lines.append('━━━ 全平台汇总 ━━━')
         content_lines.append(f'💰 总余额: ${total_quota:.2f}')
         content_lines.append(f'📊 总已用: ${total_used:.2f}')
+
+        # 添加总变动
+        if total_recharge != 0 or total_used_change != 0 or total_quota_change != 0:
+            change_parts = []
+            if total_recharge != 0:
+                change_parts.append(f'充值{"+" if total_recharge > 0 else ""}${total_recharge:.2f}')
+            if total_used_change != 0:
+                change_parts.append(f'消费{"+" if total_used_change > 0 else ""}${total_used_change:.2f}')
+            if total_quota_change != 0:
+                change_parts.append(f'可用{"+" if total_quota_change > 0 else ""}${total_quota_change:.2f}')
+            content_lines.append(f'📈 本期变动: {", ".join(change_parts)}')
 
     content = '\n'.join(content_lines)
 

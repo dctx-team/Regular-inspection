@@ -127,14 +127,15 @@ class RouterCheckin:
             )
 
             # 记录余额
+            balance_change = None
             if balance:
                 account_key = f'anyrouter_{account_name}'  # 使用账号名作为key
                 self.current_balances[account_key] = balance
 
-                # 显示余额变化
-                self._show_balance_change(account_key, balance)
+                # 显示余额变化并获取变动信息
+                balance_change = self._show_balance_change(account_key, balance)
 
-            return self._make_result(platform, account_name, success, message, balance)
+            return self._make_result(platform, account_name, success, message, balance, balance_change)
 
         except Exception as e:
             error_msg = f'签到异常: {str(e)[:50]}'
@@ -177,14 +178,15 @@ class RouterCheckin:
             )
 
             # 记录余额
+            balance_change = None
             if balance:
                 account_key = f'agentrouter_{account_name}'  # 使用账号名作为key
                 self.current_balances[account_key] = balance
 
-                # 显示余额变化
-                self._show_balance_change(account_key, balance)
+                # 显示余额变化并获取变动信息
+                balance_change = self._show_balance_change(account_key, balance)
 
-            return self._make_result(platform, account_name, success, message, balance)
+            return self._make_result(platform, account_name, success, message, balance, balance_change)
 
         except Exception as e:
             error_msg = f'签到异常: {str(e)[:50]}'
@@ -428,7 +430,8 @@ class RouterCheckin:
             await client.aclose()
 
     def _make_result(self, platform: str, name: str, success: bool,
-                     message: str, balance: Optional[Dict] = None) -> Dict:
+                     message: str, balance: Optional[Dict] = None,
+                     balance_change: Optional[Dict] = None) -> Dict:
         """构建结果对象"""
         result = {
             'platform': platform,
@@ -439,6 +442,8 @@ class RouterCheckin:
         }
         if balance:
             result['balance'] = balance
+        if balance_change:
+            result['balance_change'] = balance_change
         return result
 
     def _load_balance_hash(self) -> Optional[str]:
@@ -469,17 +474,21 @@ class RouterCheckin:
         except Exception as e:
             print(f'[WARN] 保存余额数据失败: {e}')
 
-    def _show_balance_change(self, account_key: str, current_balance: Dict):
-        """显示余额变化
+    def _show_balance_change(self, account_key: str, current_balance: Dict) -> Optional[Dict]:
+        """显示余额变化并返回变动信息
 
         逻辑说明：
         - quota: 可用余额
         - used: 已用额度
         - 账户总充值 = quota + used
+
+        返回：
+        - None: 首次记录或无变化
+        - Dict: 包含变动详情
         """
         if account_key not in self.last_balance_data:
             # 首次记录，不显示变化
-            return
+            return None
 
         last_balance = self.last_balance_data[account_key]
         last_quota = last_balance.get('quota', 0)  # 上次可用余额
@@ -498,8 +507,21 @@ class RouterCheckin:
         # 计算可用余额变化
         quota_change = current_quota - last_quota
 
+        # 构建变动信息
+        change_info = None
+
         if total_recharge != 0 or used_change != 0:
             print(f'[CHANGE] 余额变更:')
+
+            change_info = {
+                'recharge': total_recharge,
+                'used_change': used_change,
+                'quota_change': quota_change,
+                'last_quota': last_quota,
+                'last_used': last_used,
+                'current_quota': current_quota,
+                'current_used': current_used
+            }
 
             # 显示充值
             if total_recharge > 0:
@@ -520,6 +542,8 @@ class RouterCheckin:
                 print(f'  💰 可用余额减少: ${quota_change:.2f} (${last_quota:.2f} → ${current_quota:.2f})')
             else:
                 print(f'  ℹ️  可用余额不变: ${current_quota:.2f}')
+
+        return change_info
 
     def _save_balance_hash(self, balance_hash: str):
         """保存余额哈希"""
