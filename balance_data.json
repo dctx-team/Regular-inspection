@@ -14,21 +14,5 @@
   "anyrouter_linuxdo_84404": {
     "quota": 550.0,
     "used": 0.0
-  },
-  "agentrouter_github_dctx479": {
-    "quota": 251.98,
-    "used": 368.02
-  },
-  "agentrouter_github_dctx-coder": {
-    "quota": 244.52,
-    "used": 55.48
-  },
-  "agentrouter_github_dctx-ARBot": {
-    "quota": 300.0,
-    "used": 0.0
-  },
-  "agentrouter_linuxdo_bwj": {
-    "quota": 300.0,
-    "used": 0.0
   }
 }
