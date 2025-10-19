@@ -178,15 +178,22 @@ async def notify_results(results, success_count, failed_count):
 
     for result in results:
         icon = '✅' if result['success'] else '❌'
-        content_lines.append(f'{icon} [{result["platform"]}] {result["name"]} {result["message"]}')
+        status_line = f'{icon} [{result["platform"]}] {result["name"]} {result["message"]}'
+        content_lines.append(status_line)
 
         # 添加余额信息
         if result.get('balance'):
             balance = result['balance']
-            content_lines.append(f'   💰 余额: ${balance["quota"]}, 已用: ${balance["used"]}')
+            balance_line = f'   💰 余额: ${balance["quota"]}, 已用: ${balance["used"]}'
 
-        # 添加变动信息
-        if result.get('balance_change'):
+            # 如果签到失败但有余额数据，标注为"未更新"
+            if not result['success'] and result.get('balance'):
+                balance_line += ' (未更新)'
+
+            content_lines.append(balance_line)
+
+        # 添加变动信息（只有签到成功才显示）
+        if result['success'] and result.get('balance_change'):
             change = result['balance_change']
             change_items = []
             if change['recharge'] != 0:
