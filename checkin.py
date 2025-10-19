@@ -128,19 +128,36 @@ class RouterCheckin:
 
             # 记录余额
             balance_change = None
-            if balance:
-                account_key = f'anyrouter_{account_name}'  # 使用账号名作为key
-                self.current_balances[account_key] = balance
+            account_key = f'anyrouter_{account_name}'
 
+            if balance:
+                # 签到成功，更新余额
+                self.current_balances[account_key] = balance
                 # 显示余额变化并获取变动信息
                 balance_change = self._show_balance_change(account_key, balance)
+            else:
+                # 签到失败，保留旧余额数据（如果存在）
+                if account_key in self.last_balance_data:
+                    self.current_balances[account_key] = self.last_balance_data[account_key]
+                    print(f'[WARN] 签到失败，保留上次余额数据（未更新）')
+                    # 使用旧余额作为当前余额
+                    balance = self.last_balance_data[account_key]
 
             return self._make_result(platform, account_name, success, message, balance, balance_change)
 
         except Exception as e:
             error_msg = f'签到异常: {str(e)[:50]}'
             print(f'[ERROR] {error_msg}')
-            return self._make_result(platform, account_name, False, error_msg)
+
+            # 异常情况也保留旧余额数据
+            account_key = f'anyrouter_{account_name}'
+            balance = None
+            if account_key in self.last_balance_data:
+                self.current_balances[account_key] = self.last_balance_data[account_key]
+                balance = self.last_balance_data[account_key]
+                print(f'[WARN] 发生异常，保留上次余额数据（未更新）')
+
+            return self._make_result(platform, account_name, False, error_msg, balance)
 
     async def checkin_agentrouter(self, account: Dict, index: int) -> Dict:
         """AgentRouter 签到"""
@@ -179,19 +196,36 @@ class RouterCheckin:
 
             # 记录余额
             balance_change = None
-            if balance:
-                account_key = f'agentrouter_{account_name}'  # 使用账号名作为key
-                self.current_balances[account_key] = balance
+            account_key = f'agentrouter_{account_name}'
 
+            if balance:
+                # 签到成功，更新余额
+                self.current_balances[account_key] = balance
                 # 显示余额变化并获取变动信息
                 balance_change = self._show_balance_change(account_key, balance)
+            else:
+                # 签到失败，保留旧余额数据（如果存在）
+                if account_key in self.last_balance_data:
+                    self.current_balances[account_key] = self.last_balance_data[account_key]
+                    print(f'[WARN] 签到失败，保留上次余额数据（未更新）')
+                    # 使用旧余额作为当前余额
+                    balance = self.last_balance_data[account_key]
 
             return self._make_result(platform, account_name, success, message, balance, balance_change)
 
         except Exception as e:
             error_msg = f'签到异常: {str(e)[:50]}'
             print(f'[ERROR] {error_msg}')
-            return self._make_result(platform, account_name, False, error_msg)
+
+            # 异常情况也保留旧余额数据
+            account_key = f'agentrouter_{account_name}'
+            balance = None
+            if account_key in self.last_balance_data:
+                self.current_balances[account_key] = self.last_balance_data[account_key]
+                balance = self.last_balance_data[account_key]
+                print(f'[WARN] 发生异常，保留上次余额数据（未更新）')
+
+            return self._make_result(platform, account_name, False, error_msg, balance)
 
     async def _get_waf_cookies_with_fallback(self, account_name: str, urls: List[str]) -> Optional[Dict[str, str]]:
         """尝试多个 URL 获取 WAF cookies"""
