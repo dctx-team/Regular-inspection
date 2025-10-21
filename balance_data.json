@@ -4,8 +4,8 @@
     "used": 236.67
   },
   "anyrouter_ljq": {
-    "quota": 550.0,
-    "used": 99.76
+    "quota": 125.0,
+    "used": 0.0
   },
   "anyrouter_zc": {
     "quota": 576.28,
@@ -13,6 +13,10 @@
   },
   "anyrouter_linuxdo_84404": {
     "quota": 600.0,
+    "used": 0.0
+  },
+  "anyrouter_linux_chuang": {
+    "quota": 125.0,
     "used": 0.0
   },
   "agentrouter_github_dctx479": {
