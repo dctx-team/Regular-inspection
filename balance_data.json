@@ -1,7 +1,7 @@
 {
   "anyrouter_dctx": {
-    "quota": 563.33,
-    "used": 236.67
+    "quota": 563.28,
+    "used": 236.72
   },
   "anyrouter_ljq": {
     "quota": 600.0,
@@ -12,8 +12,8 @@
     "used": 77.6
   },
   "anyrouter_linuxdo_84404": {
-    "quota": 608.16,
-    "used": 41.84
+    "quota": 596.12,
+    "used": 53.88
   },
   "anyrouter_linux_chuang": {
     "quota": 175.0,
