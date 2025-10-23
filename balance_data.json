@@ -1,7 +1,7 @@
 {
   "anyrouter_dctx": {
-    "quota": 563.28,
-    "used": 236.72
+    "quota": 563.25,
+    "used": 236.75
   },
   "anyrouter_ljq": {
     "quota": 600.0,
@@ -12,8 +12,8 @@
     "used": 77.6
   },
   "anyrouter_linuxdo_84404": {
-    "quota": 596.12,
-    "used": 53.88
+    "quota": 589.32,
+    "used": 60.68
   },
   "anyrouter_linux_chuang": {
     "quota": 175.0,
@@ -32,19 +32,19 @@
     "used": 0.0
   },
   "agentrouter_github_dctx479": {
-    "quota": 327.6,
-    "used": 467.4
+    "quota": 397.5,
+    "used": 467.5
   },
   "agentrouter_github_dctx-coder": {
-    "quota": 286.99,
+    "quota": 336.99,
     "used": 88.01
   },
   "agentrouter_github_dctx-ARBot": {
-    "quota": 203.19,
+    "quota": 228.19,
     "used": 171.81
   },
   "agentrouter_linuxdo_bwj": {
-    "quota": 326.12,
+    "quota": 376.12,
     "used": 48.88
   }
 }
