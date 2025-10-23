@@ -1,6 +1,6 @@
 {
   "anyrouter_dctx": {
-    "quota": 538.33,
+    "quota": 563.33,
     "used": 236.67
   },
   "anyrouter_ljq": {
@@ -20,6 +20,14 @@
     "used": 0.0
   },
   "anyrouter_linux_bwj": {
+    "quota": 150.0,
+    "used": 0.0
+  },
+  "anyrouter_linux_devbai": {
+    "quota": 150.0,
+    "used": 0.0
+  },
+  "anyrouter_linux_Yeahnet": {
     "quota": 150.0,
     "used": 0.0
   },
