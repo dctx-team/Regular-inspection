@@ -1,632 +1,291 @@
+#!/usr/bin/env python3
 """
-签到核心逻辑模块
-整合 AnyRouter 和 AgentRouter 的签到功能
+签到核心模块 - 重构版
+支持多种认证方式和多平台
 """
 
 import asyncio
 import hashlib
 import json
 import os
-from datetime import datetime
-from typing import Dict, List, Optional
+import tempfile
+from typing import Dict, List, Tuple, Optional
 
 import httpx
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Page, BrowserContext
 
-from config import parse_cookies
-
-
-BALANCE_HASH_FILE = 'balance_hash.txt'
-BALANCE_DATA_FILE = 'balance_data.json'
+from utils.config import AccountConfig, ProviderConfig, AuthConfig
+from utils.auth import get_authenticator
 
 
-class RouterCheckin:
-    """Router平台签到类"""
+class CheckIn:
+    """统一的签到管理类"""
 
-    def __init__(self):
-        self.last_balance_hash = self._load_balance_hash()
-        self.last_balance_data = self._load_balance_data()
-        self.current_balances = {}
-        self.balance_changed = False
+    def __init__(self, account: AccountConfig, provider: ProviderConfig):
+        self.account = account
+        self.provider = provider
+        self.balance_data_file = "balance_data.json"
 
-    async def run_all(self, anyrouter_accounts: List[Dict], agentrouter_accounts: List[Dict]) -> List[Dict]:
-        """执行所有账号的签到"""
+    async def execute(self) -> List[Tuple[str, bool, Optional[Dict]]]:
+        """
+        执行签到流程
+
+        Returns:
+            List[(auth_method, success, user_info)]
+        """
         results = []
 
-        # 处理 AnyRouter 账号
-        anyrouter_results = []
-        for i, account in enumerate(anyrouter_accounts):
-            result = await self.checkin_anyrouter(account, i)
-            results.append(result)
-            anyrouter_results.append(result)
-            await asyncio.sleep(2)  # 避免请求过快
+        # 尝试所有配置的认证方式
+        for auth_config in self.account.auth_configs:
+            print(f"\n{'='*60}")
+            print(f"📝 [{self.account.name}] 尝试使用 {auth_config.method} 认证")
+            print(f"{'='*60}")
 
-        # 显示 AnyRouter 平台汇总
-        if anyrouter_results:
-            self._print_platform_summary('AnyRouter', anyrouter_results)
+            try:
+                success, user_info = await self._checkin_with_auth(auth_config)
+                results.append((auth_config.method, success, user_info))
 
-        # 处理 AgentRouter 账号
-        agentrouter_results = []
-        for i, account in enumerate(agentrouter_accounts):
-            result = await self.checkin_agentrouter(account, i)
-            results.append(result)
-            agentrouter_results.append(result)
-            await asyncio.sleep(2)
+                if success:
+                    print(f"✅ [{self.account.name}] {auth_config.method} 认证成功")
+                else:
+                    error_msg = user_info.get("error", "Unknown error") if user_info else "Unknown error"
+                    print(f"❌ [{self.account.name}] {auth_config.method} 认证失败: {error_msg}")
 
-        # 显示 AgentRouter 平台汇总
-        if agentrouter_results:
-            self._print_platform_summary('AgentRouter', agentrouter_results)
-
-        # 检查余额变化
-        self._check_balance_change()
+            except Exception as e:
+                print(f"❌ [{self.account.name}] {auth_config.method} 异常: {str(e)}")
+                results.append((auth_config.method, False, {"error": str(e)}))
 
         return results
 
-    def _print_platform_summary(self, platform_name: str, platform_results: List[Dict]):
-        """打印单个平台的汇总统计"""
-        success_count = sum(1 for r in platform_results if r['success'])
-        failed_count = len(platform_results) - success_count
+    async def _checkin_with_auth(self, auth_config: AuthConfig) -> Tuple[bool, Optional[Dict]]:
+        """使用指定的认证方式进行签到"""
 
-        total_quota = 0
-        total_used = 0
-        has_balance = False
-
-        for result in platform_results:
-            if result.get('balance'):
-                has_balance = True
-                balance = result['balance']
-                total_quota += balance['quota']
-                total_used += balance['used']
-
-        print()
-        print('─' * 60)
-        print(f'📊 {platform_name} 平台汇总')
-        print('─' * 60)
-        print(f'账号数量: {len(platform_results)} 个')
-        print(f'成功: {success_count} 个 | 失败: {failed_count} 个')
-
-        if has_balance:
-            print(f'总余额: ${total_quota:.2f}')
-            print(f'总已用: ${total_used:.2f}')
-
-        print('─' * 60)
-
-    async def checkin_anyrouter(self, account: Dict, index: int) -> Dict:
-        """AnyRouter 签到"""
-        platform = 'AnyRouter'
-        account_name = account.get('name', f'AnyRouter账号{index+1}')
-
-        print(f'\n[PROCESSING] 正在处理 [{platform}] {account_name}')
-
-        try:
-            # 解析配置
-            cookies_data = account.get('cookies', {})
-            api_user = account.get('api_user', '')
-
-            if not api_user:
-                return self._make_result(platform, account_name, False, 'API User ID 未配置')
-
-            user_cookies = parse_cookies(cookies_data)
-            if not user_cookies:
-                return self._make_result(platform, account_name, False, 'Cookies 格式错误')
-
-            # 获取 WAF cookies
-            print(f'[STEP 1] 获取 WAF cookies...')
-            waf_cookies = await self._get_waf_cookies(account_name, 'https://anyrouter.top/login')
-
-            if not waf_cookies:
-                return self._make_result(platform, account_name, False, '无法获取 WAF cookies')
-
-            # 合并 cookies
-            all_cookies = {**waf_cookies, **user_cookies}
-
-            # 构建请求
-            print(f'[STEP 2] 执行签到请求...')
-            success, message, balance = await self._do_anyrouter_checkin(
-                account_name, all_cookies, api_user
-            )
-
-            # 记录余额
-            balance_change = None
-            account_key = f'anyrouter_{account_name}'
-
-            if balance:
-                # 签到成功，更新余额
-                self.current_balances[account_key] = balance
-                # 显示余额变化并获取变动信息
-                balance_change = self._show_balance_change(account_key, balance)
-            else:
-                # 签到失败，保留旧余额数据（如果存在）
-                if account_key in self.last_balance_data:
-                    self.current_balances[account_key] = self.last_balance_data[account_key]
-                    print(f'[WARN] 签到失败，保留上次余额数据（未更新）')
-                    # 使用旧余额作为当前余额
-                    balance = self.last_balance_data[account_key]
-
-            return self._make_result(platform, account_name, success, message, balance, balance_change)
-
-        except Exception as e:
-            error_msg = f'签到异常: {str(e)[:50]}'
-            print(f'[ERROR] {error_msg}')
-
-            # 异常情况也保留旧余额数据
-            account_key = f'anyrouter_{account_name}'
-            balance = None
-            if account_key in self.last_balance_data:
-                self.current_balances[account_key] = self.last_balance_data[account_key]
-                balance = self.last_balance_data[account_key]
-                print(f'[WARN] 发生异常，保留上次余额数据（未更新）')
-
-            return self._make_result(platform, account_name, False, error_msg, balance)
-
-    async def checkin_agentrouter(self, account: Dict, index: int) -> Dict:
-        """AgentRouter 签到"""
-        platform = 'AgentRouter'
-        account_name = account.get('name', f'AgentRouter账号{index+1}')
-
-        print(f'\n[PROCESSING] 正在处理 [{platform}] {account_name}')
-
-        try:
-            # 解析配置
-            cookies_data = account.get('cookies', {})
-            api_user = account.get('api_user', '')
-
-            if not api_user:
-                return self._make_result(platform, account_name, False, 'API User ID 未配置')
-
-            user_cookies = parse_cookies(cookies_data)
-            if not user_cookies:
-                return self._make_result(platform, account_name, False, 'Cookies 格式错误')
-
-            # 尝试获取 WAF cookies（尝试多个 URL）
-            print(f'[STEP 1] 获取 WAF cookies...')
-            waf_cookies = await self._get_waf_cookies_with_fallback(
-                account_name,
-                ['https://agentrouter.org', 'https://agentrouter.org/console']
-            )
-
-            # 合并 cookies（即使没有 WAF cookies 也继续）
-            all_cookies = {**waf_cookies, **user_cookies} if waf_cookies else user_cookies
-
-            # 执行签到请求
-            print(f'[STEP 2] 执行签到请求...')
-            success, message, balance = await self._do_agentrouter_checkin(
-                account_name, all_cookies, api_user
-            )
-
-            # 记录余额
-            balance_change = None
-            account_key = f'agentrouter_{account_name}'
-
-            if balance:
-                # 签到成功，更新余额
-                self.current_balances[account_key] = balance
-                # 显示余额变化并获取变动信息
-                balance_change = self._show_balance_change(account_key, balance)
-            else:
-                # 签到失败，保留旧余额数据（如果存在）
-                if account_key in self.last_balance_data:
-                    self.current_balances[account_key] = self.last_balance_data[account_key]
-                    print(f'[WARN] 签到失败，保留上次余额数据（未更新）')
-                    # 使用旧余额作为当前余额
-                    balance = self.last_balance_data[account_key]
-
-            return self._make_result(platform, account_name, success, message, balance, balance_change)
-
-        except Exception as e:
-            error_msg = f'签到异常: {str(e)[:50]}'
-            print(f'[ERROR] {error_msg}')
-
-            # 异常情况也保留旧余额数据
-            account_key = f'agentrouter_{account_name}'
-            balance = None
-            if account_key in self.last_balance_data:
-                self.current_balances[account_key] = self.last_balance_data[account_key]
-                balance = self.last_balance_data[account_key]
-                print(f'[WARN] 发生异常，保留上次余额数据（未更新）')
-
-            return self._make_result(platform, account_name, False, error_msg, balance)
-
-    async def _get_waf_cookies_with_fallback(self, account_name: str, urls: List[str]) -> Optional[Dict[str, str]]:
-        """尝试多个 URL 获取 WAF cookies"""
-        for url in urls:
-            print(f'[INFO] 尝试 URL: {url}')
-            cookies = await self._get_waf_cookies(account_name, url, timeout=20000)
-            if cookies:
-                return cookies
-
-        print(f'[WARN] 所有 URL 均未获取到 WAF cookies，将只使用用户 cookies')
-        return None
-
-    async def _get_waf_cookies(self, account_name: str, url: str, timeout: int = 30000) -> Optional[Dict[str, str]]:
-        """使用 Playwright 获取 WAF cookies"""
         async with async_playwright() as p:
-            import tempfile
             with tempfile.TemporaryDirectory() as temp_dir:
+                # 启动浏览器
                 context = await p.chromium.launch_persistent_context(
                     user_data_dir=temp_dir,
                     headless=True,
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-                    viewport={'width': 1920, 'height': 1080},
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080},
                     args=[
-                        '--disable-blink-features=AutomationControlled',
-                        '--disable-dev-shm-usage',
-                        '--disable-web-security',
-                        '--no-sandbox',
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--disable-web-security",
+                        "--no-sandbox",
                     ],
                 )
 
                 page = await context.new_page()
 
                 try:
-                    print(f'[INFO] 访问页面获取 cookies...')
-                    await page.goto(url, wait_until='domcontentloaded', timeout=timeout)
+                    # 步骤 1: 获取 WAF cookies
+                    waf_cookies = await self._get_waf_cookies(page, context)
+                    if not waf_cookies:
+                        print(f"⚠️ [{self.account.name}] 未获取到 WAF cookies，继续尝试")
 
-                    try:
-                        await page.wait_for_function('document.readyState === "complete"', timeout=3000)
-                    except Exception:
-                        await page.wait_for_timeout(2000)
+                    # 步骤 2: 执行认证
+                    authenticator = get_authenticator(auth_config, self.provider)
+                    auth_result = await authenticator.authenticate(page, context)
 
-                    cookies = await page.context.cookies()
+                    if not auth_result["success"]:
+                        return False, {"error": auth_result.get("error", "Authentication failed")}
 
-                    waf_cookies = {}
-                    for cookie in cookies:
-                        cookie_name = cookie.get('name')
-                        cookie_value = cookie.get('value')
-                        if cookie_name in ['acw_tc', 'cdn_sec_tc', 'acw_sc__v2'] and cookie_value:
-                            waf_cookies[cookie_name] = cookie_value
+                    # 获取认证后的 cookies
+                    auth_cookies = auth_result.get("cookies", {})
+                    print(f"✅ [{self.account.name}] 认证成功，获取到 cookies")
 
-                    print(f'[SUCCESS] 获取到 {len(waf_cookies)} 个 WAF cookies')
+                    # 步骤 3: 执行签到
+                    checkin_result = await self._do_checkin(auth_cookies, auth_config)
+                    if not checkin_result["success"]:
+                        return False, {"error": checkin_result.get("message", "Check-in failed")}
 
-                    await context.close()
-                    return waf_cookies if waf_cookies else None
+                    print(f"✅ [{self.account.name}] 签到成功: {checkin_result.get('message', '')}")
+
+                    # 步骤 4: 获取用户信息和余额
+                    user_info = await self._get_user_info(auth_cookies, auth_config)
+                    if user_info and user_info.get("success"):
+                        # 计算余额变化
+                        balance_change = self._calculate_balance_change(
+                            self.account.name,
+                            auth_config.method,
+                            user_info
+                        )
+                        user_info["balance_change"] = balance_change
+
+                        # 保存余额数据
+                        self._save_balance_data(self.account.name, auth_config.method, user_info)
+
+                        return True, user_info
+                    else:
+                        return True, {"success": True, "message": "Check-in successful but failed to get user info"}
 
                 except Exception as e:
-                    print(f'[ERROR] 获取 WAF cookies 失败: {e}')
+                    return False, {"error": f"Exception during check-in: {str(e)}"}
+
+                finally:
+                    await page.close()
                     await context.close()
-                    return None
 
-
-    async def _do_anyrouter_checkin(self, account_name: str, cookies: Dict, api_user: str) -> tuple:
-        """执行 AnyRouter 签到请求"""
-        client = httpx.AsyncClient(http2=True, timeout=30.0)
-
+    async def _get_waf_cookies(self, page: Page, context: BrowserContext) -> Dict[str, str]:
+        """获取 WAF cookies"""
         try:
-            client.cookies.update(cookies)
+            print(f"ℹ️ [{self.account.name}] 正在获取 WAF cookies...")
 
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Referer': 'https://anyrouter.top/console',
-                'Origin': 'https://anyrouter.top',
-                'new-api-user': api_user,
-            }
+            # 访问登录页面以触发 WAF
+            await page.goto(self.provider.get_login_url(), wait_until="domcontentloaded", timeout=20000)
 
-            # 获取用户信息
-            balance = None
+            # 等待页面加载
             try:
-                print(f'[INFO] 尝试获取用户信息...')
-                user_response = await client.get('https://anyrouter.top/api/user/self', headers=headers)
-                print(f'[DEBUG] 用户信息响应: HTTP {user_response.status_code}')
+                await page.wait_for_function('document.readyState === "complete"', timeout=5000)
+            except:
+                await page.wait_for_timeout(3000)
 
-                if user_response.status_code == 200:
-                    user_data = user_response.json()
-                    if user_data.get('success'):
-                        data = user_data.get('data', {})
-                        quota = round(data.get('quota', 0) / 500000, 2)
-                        used = round(data.get('used_quota', 0) / 500000, 2)
-                        balance = {'quota': quota, 'used': used}
-                        print(f'[INFO] 当前余额: ${quota}, 已用: ${used}')
-                    else:
-                        print(f'[WARN] API返回失败: {user_data.get("message", "未知错误")}')
-                elif user_response.status_code == 401:
-                    print(f'[ERROR] ⚠️  认证失败 - Session Cookie 已过期！')
-                    print(f'[ERROR] 请重新登录 https://anyrouter.top/register?aff=hgT6 获取新的 session cookie')
-                    print(f'[ERROR] 并更新 GitHub Secrets 中的 ANYROUTER_ACCOUNTS 配置')
-                    try:
-                        error_data = user_response.json()
-                        print(f'[ERROR] 错误信息: {error_data.get("message", "未知错误")}')
-                    except:
-                        pass
-                else:
-                    print(f'[WARN] 获取用户信息失败: HTTP {user_response.status_code}')
-            except Exception as e:
-                print(f'[ERROR] 获取余额异常: {e}')
+            # 提取 WAF cookies
+            cookies = await context.cookies()
+            waf_cookies = {}
+            for cookie in cookies:
+                if cookie["name"] in ["acw_tc", "cdn_sec_tc", "acw_sc__v2"]:
+                    waf_cookies[cookie["name"]] = cookie["value"]
 
-            # 执行签到
-            checkin_headers = headers.copy()
-            checkin_headers.update({
-                'Content-Type': 'application/json',
-                'X-Requested-With': 'XMLHttpRequest'
-            })
-
-            response = await client.post(
-                'https://anyrouter.top/api/user/sign_in',
-                headers=checkin_headers
-            )
-
-            print(f'[RESPONSE] HTTP {response.status_code}')
-
-            if response.status_code == 200:
-                try:
-                    result = response.json()
-                    if result.get('ret') == 1 or result.get('code') == 0 or result.get('success'):
-                        return True, '签到成功', balance
-                    else:
-                        msg = result.get('msg', result.get('message', '未知错误'))
-                        return False, f'签到失败: {msg}', balance
-                except Exception:
-                    if 'success' in response.text.lower():
-                        return True, '签到成功', balance
-                    return False, '签到失败: 响应格式错误', balance
+            if waf_cookies:
+                print(f"✅ [{self.account.name}] 获取到 {len(waf_cookies)} 个 WAF cookies")
             else:
-                return False, f'签到失败: HTTP {response.status_code}', balance
+                print(f"⚠️ [{self.account.name}] 未获取到 WAF cookies")
+
+            return waf_cookies
 
         except Exception as e:
-            return False, f'请求异常: {str(e)[:50]}', None
-        finally:
-            await client.aclose()
+            print(f"⚠️ [{self.account.name}] 获取 WAF cookies 失败: {str(e)}")
+            return {}
 
-    async def _do_agentrouter_checkin(self, account_name: str, cookies: Dict, api_user: str) -> tuple:
-        """执行 AgentRouter 签到请求"""
-        # AgentRouter 可能使用类似的API，这里需要根据实际情况调整
-        client = httpx.AsyncClient(http2=True, timeout=30.0)
-
+    async def _do_checkin(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Dict:
+        """执行签到请求"""
         try:
-            client.cookies.update(cookies)
-
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Referer': 'https://agentrouter.org/console',
-                'Origin': 'https://agentrouter.org',
-                'new-api-user': api_user,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
+                "Origin": self.provider.base_url,
+                "Referer": f"{self.provider.base_url}/",
             }
 
-            # 尝试获取用户信息（测试登录状态）
-            balance = None
-            try:
-                print(f'[INFO] 尝试获取用户信息...')
-                user_response = await client.get('https://agentrouter.org/api/user/self', headers=headers)
-                print(f'[DEBUG] 用户信息响应: HTTP {user_response.status_code}')
+            # 添加 api_user header（如果有）
+            if auth_config.api_user:
+                headers["New-Api-User"] = str(auth_config.api_user)
 
-                if user_response.status_code == 200:
-                    user_data = user_response.json()
-                    # 不显示完整响应数据，避免泄露敏感信息
-
-                    if user_data.get('success'):
-                        data = user_data.get('data', {})
-                        quota = round(data.get('quota', 0) / 500000, 2)
-                        used = round(data.get('used_quota', 0) / 500000, 2)
-                        balance = {'quota': quota, 'used': used}
-                        print(f'[INFO] 当前余额: ${quota}, 已用: ${used}')
-                    else:
-                        print(f'[WARN] API返回失败: {user_data.get("message", "未知错误")}')
-                elif user_response.status_code == 401:
-                    print(f'[ERROR] ⚠️  认证失败 - Session Cookie 已过期！')
-                    print(f'[ERROR] 请重新登录 https://agentrouter.org/register?aff=7Stf 获取新的 session cookie')
-                    print(f'[ERROR] 并更新 GitHub Secrets 中的 AGENTROUTER_ACCOUNTS 配置')
-                    try:
-                        error_data = user_response.json()
-                        print(f'[ERROR] 错误信息: {error_data.get("message", "未知错误")}')
-                    except:
-                        pass
-                else:
-                    print(f'[WARN] 获取用户信息失败: HTTP {user_response.status_code}')
-                    try:
-                        print(f'[DEBUG] 错误响应: {user_response.text[:200]}')
-                    except:
-                        pass
-            except Exception as e:
-                print(f'[ERROR] 获取余额异常: {e}')
-
-            # 尝试签到（如果有签到接口）
-            checkin_headers = headers.copy()
-            checkin_headers.update({
-                'Content-Type': 'application/json',
-                'X-Requested-With': 'XMLHttpRequest'
-            })
-
-            try:
+            async with httpx.AsyncClient(cookies=cookies, timeout=30.0) as client:
                 response = await client.post(
-                    'https://agentrouter.org/api/user/sign_in',
-                    headers=checkin_headers
+                    self.provider.get_checkin_url(),
+                    headers=headers
                 )
 
-                print(f'[RESPONSE] HTTP {response.status_code}')
-
                 if response.status_code == 200:
-                    result = response.json()
-                    if result.get('ret') == 1 or result.get('code') == 0 or result.get('success'):
-                        return True, '签到成功', balance
+                    data = response.json()
+                    if data.get("success"):
+                        return {"success": True, "message": data.get("message", "签到成功")}
                     else:
-                        msg = result.get('msg', result.get('message', '未知错误'))
-                        return False, f'签到失败: {msg}', balance
-                elif response.status_code == 404:
-                    # 如果没有签到接口，只要能获取用户信息就算成功
-                    if balance:
-                        return True, '签到成功', balance
-                    return False, '签到失败: 无法获取用户信息', None
+                        return {"success": False, "message": data.get("message", "签到失败")}
                 else:
-                    return False, f'签到失败: HTTP {response.status_code}', balance
-
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404 and balance:
-                    # 如果签到接口不存在但能获取余额，算作签到成功
-                    return True, '签到成功', balance
-                return False, f'请求失败: {e}', balance
+                    return {"success": False, "message": f"HTTP {response.status_code}"}
 
         except Exception as e:
-            return False, f'请求异常: {str(e)[:50]}', None
-        finally:
-            await client.aclose()
+            return {"success": False, "message": f"请求异常: {str(e)}"}
 
-    def _make_result(self, platform: str, name: str, success: bool,
-                     message: str, balance: Optional[Dict] = None,
-                     balance_change: Optional[Dict] = None) -> Dict:
-        """构建结果对象"""
-        result = {
-            'platform': platform,
-            'name': name,
-            'success': success,
-            'message': message,
-            'timestamp': datetime.now().isoformat()
-        }
-        if balance:
-            result['balance'] = balance
-        if balance_change:
-            result['balance_change'] = balance_change
-        return result
-
-    def _load_balance_hash(self) -> Optional[str]:
-        """加载余额哈希"""
+    async def _get_user_info(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Optional[Dict]:
+        """获取用户信息和余额"""
         try:
-            if os.path.exists(BALANCE_HASH_FILE):
-                with open(BALANCE_HASH_FILE, 'r') as f:
-                    return f.read().strip()
-        except Exception:
-            pass
-        return None
-
-    def _load_balance_data(self) -> Dict:
-        """加载上次的余额数据"""
-        try:
-            if os.path.exists(BALANCE_DATA_FILE):
-                with open(BALANCE_DATA_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except Exception:
-            pass
-        return {}
-
-    def _save_balance_data(self):
-        """保存当前余额数据"""
-        try:
-            with open(BALANCE_DATA_FILE, 'w', encoding='utf-8') as f:
-                json.dump(self.current_balances, f, ensure_ascii=False, indent=2)
-            print(f'[INFO] 余额数据已保存到 {BALANCE_DATA_FILE}')
-            print(f'[INFO] 保存了 {len(self.current_balances)} 个账号的余额数据')
-        except Exception as e:
-            print(f'[WARN] 保存余额数据失败: {e}')
-
-    def _show_balance_change(self, account_key: str, current_balance: Dict) -> Optional[Dict]:
-        """显示余额变化并返回变动信息
-
-        逻辑说明：
-        - quota: 可用余额
-        - used: 已用额度
-        - 账户总额度 = quota + used
-
-        返回：
-        - None: 首次记录或无变化
-        - Dict: 包含变动详情
-        """
-        if account_key not in self.last_balance_data:
-            # 首次记录，不显示变化
-            return None
-
-        last_balance = self.last_balance_data[account_key]
-        last_quota = last_balance.get('quota', 0)  # 上次可用余额
-        last_used = last_balance.get('used', 0)    # 上次已用
-        current_quota = current_balance['quota']    # 当前可用余额
-        current_used = current_balance['used']      # 当前已用
-
-        # 计算总额度变化
-        last_total = last_quota + last_used      # 上次总额度
-        current_total = current_quota + current_used  # 当前总额度
-        total_recharge = current_total - last_total   # 新增加金额
-
-        # 计算使用变化
-        used_change = current_used - last_used
-
-        # 计算可用余额变化
-        quota_change = current_quota - last_quota
-
-        # 构建变动信息
-        change_info = None
-
-        if total_recharge != 0 or used_change != 0:
-            print(f'[CHANGE] 余额变更:')
-
-            change_info = {
-                'recharge': total_recharge,
-                'used_change': used_change,
-                'quota_change': quota_change,
-                'last_quota': last_quota,
-                'last_used': last_used,
-                'current_quota': current_quota,
-                'current_used': current_used
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
             }
 
-            # 显示增加
-            if total_recharge > 0:
-                print(f'  💳 本期增加: +${total_recharge:.2f} (总额度: ${last_total:.2f} → ${current_total:.2f})')
-            elif total_recharge < 0:
-                print(f'  ⚠️  总额度减少: ${total_recharge:.2f} (${last_total:.2f} → ${current_total:.2f})')
+            if auth_config.api_user:
+                headers["New-Api-User"] = str(auth_config.api_user)
 
-            # 显示使用
-            if used_change > 0:
-                print(f'  📊 本期使用: +${used_change:.2f} (已用: ${last_used:.2f} → ${current_used:.2f})')
-            elif used_change < 0:
-                print(f'  🔄 已用减少: ${used_change:.2f} (${last_used:.2f} → ${current_used:.2f})')
+            async with httpx.AsyncClient(cookies=cookies, timeout=30.0) as client:
+                response = await client.get(
+                    self.provider.get_user_info_url(),
+                    headers=headers
+                )
 
-            # 显示可用余额变化（净效果）
-            if quota_change > 0:
-                print(f'  💰 可用余额增加: +${quota_change:.2f} (${last_quota:.2f} → ${current_quota:.2f})')
-            elif quota_change < 0:
-                print(f'  💰 可用余额减少: ${quota_change:.2f} (${last_quota:.2f} → ${current_quota:.2f})')
-            else:
-                print(f'  ℹ️  可用余额不变: ${current_quota:.2f}')
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("success") and data.get("data"):
+                        user_data = data["data"]
+                        quota = user_data.get("quota", 0) / 500000  # 转换为美元
+                        used_quota = user_data.get("used_quota", 0) / 500000
 
-        return change_info
+                        return {
+                            "success": True,
+                            "quota": round(quota, 2),
+                            "used": round(used_quota, 2),
+                            "display": f"余额: ${quota:.2f}, 已用: ${used_quota:.2f}"
+                        }
 
-    def _save_balance_hash(self, balance_hash: str):
-        """保存余额哈希"""
-        try:
-            with open(BALANCE_HASH_FILE, 'w') as f:
-                f.write(balance_hash)
-            print(f'[INFO] 余额哈希已保存到 {BALANCE_HASH_FILE}: {balance_hash}')
+            return None
+
         except Exception as e:
-            print(f'[WARN] 保存余额哈希失败: {e}')
+            print(f"⚠️ [{self.account.name}] 获取用户信息失败: {str(e)}")
+            return None
 
-    def _generate_balance_hash(self, balances: Dict) -> str:
-        """生成余额哈希"""
-        simple_balances = {k: v['quota'] for k, v in balances.items()}
-        balance_json = json.dumps(simple_balances, sort_keys=True)
-        return hashlib.sha256(balance_json.encode()).hexdigest()[:16]
+    def _calculate_balance_change(self, account_name: str, auth_method: str, current_info: Dict) -> Dict:
+        """计算余额变化"""
+        change = {
+            "recharge": 0,
+            "used_change": 0,
+            "quota_change": 0
+        }
 
-    def _check_balance_change(self):
-        """检查余额是否变化"""
-        if not self.current_balances:
-            return
+        try:
+            # 读取历史余额数据
+            if os.path.exists(self.balance_data_file):
+                with open(self.balance_data_file, "r", encoding="utf-8") as f:
+                    history_data = json.load(f)
 
-        current_hash = self._generate_balance_hash(self.current_balances)
+                # 查找历史记录
+                key = f"{account_name}_{auth_method}"
+                if key in history_data:
+                    old_info = history_data[key]
+                    old_quota = old_info.get("quota", 0)
+                    old_used = old_info.get("used", 0)
 
-        # 判断是否首次运行
-        is_first_run = (self.last_balance_hash is None and not self.last_balance_data)
+                    current_quota = current_info.get("quota", 0)
+                    current_used = current_info.get("used", 0)
 
-        if is_first_run:
-            # 真正的首次运行（既没有 hash 也没有余额数据）
-            self.balance_changed = True
-            print('[INFO] 首次运行，记录当前余额')
-        elif self.last_balance_hash is None:
-            # 有余额数据但没有 hash（可能是旧版本升级）
-            self.balance_changed = True
-            print('[INFO] 重新生成余额哈希')
-        elif current_hash != self.last_balance_hash:
-            # 余额变化
-            self.balance_changed = True
-            print('[INFO] 检测到余额变化')
-        else:
-            # 余额无变化
-            self.balance_changed = False
-            print('[INFO] 余额无变化')
+                    # 计算变化
+                    total_change = (current_quota + current_used) - (old_quota + old_used)
+                    used_change = current_used - old_used
+                    quota_change = current_quota - old_quota
 
-        # 保存新的哈希和余额数据
-        self._save_balance_hash(current_hash)
-        self._save_balance_data()
+                    change["recharge"] = round(total_change, 2)
+                    change["used_change"] = round(used_change, 2)
+                    change["quota_change"] = round(quota_change, 2)
 
-    def has_balance_changed(self) -> bool:
-        """余额是否变化"""
-        return self.balance_changed
+        except Exception as e:
+            print(f"⚠️ 计算余额变化失败: {str(e)}")
+
+        return change
+
+    def _save_balance_data(self, account_name: str, auth_method: str, current_info: Dict):
+        """保存余额数据"""
+        try:
+            # 读取现有数据
+            data = {}
+            if os.path.exists(self.balance_data_file):
+                with open(self.balance_data_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+            # 更新数据
+            key = f"{account_name}_{auth_method}"
+            data[key] = {
+                "quota": current_info.get("quota", 0),
+                "used": current_info.get("used", 0),
+                "timestamp": __import__("time").time()
+            }
+
+            # 保存
+            with open(self.balance_data_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+
+        except Exception as e:
+            print(f"⚠️ 保存余额数据失败: {str(e)}")
