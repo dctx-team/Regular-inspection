@@ -1,17 +1,26 @@
-# Router平台定时签到/登录
+# Router平台定时签到/登录 (重构版)
 
-基于 Python + Playwright 实现的自动签到脚本，支持 anyrouter.top 和 agentrouter.org 多账号自动签到保活。
+基于 Python + Playwright 实现的自动签到脚本，支持 AnyRouter、AgentRouter 等多平台多账号自动签到保活。
 
-## 功能特点
+## ✨ 新版特性 (v2.0)
 
-- ✅ 支持 anyrouter.top 和 agentrouter.org 多账号
+### 🎯 核心改进
+- ✅ **模块化架构** - 全新的代码结构，更易维护和扩展
+- ✅ **类型安全** - 使用数据类 (dataclass) 进行配置管理
+- ✅ **多认证方式** - 支持 Cookies、GitHub OAuth、Linux.do OAuth
+- ✅ **Provider 抽象** - 统一的平台接口，支持自定义 Provider
+- ✅ **智能重试** - 自动尝试所有配置的认证方式
+- ✅ **余额跟踪** - 详细的余额变化监控和通知
+
+### 📦 功能特点
+- ✅ 支持 anyrouter.top 和 agentrouter.org 多平台
+- ✅ 支持 Cookies、GitHub、Linux.do 三种登录方式
 - ✅ 自动绕过 WAF/Cloudflare 保护
-- ✅ Cookie 持久化，智能登录
 - ✅ 余额监控和变化通知
-- ✅ 多种通知方式（邮件、钉钉、飞书、企业微信等）
+- ✅ 多种通知方式（邮件、钉钉、飞书、企业微信、ServerChan、PushPlus）
 - ✅ GitHub Actions 自动定时执行
 - ✅ 详细的执行日志和报告
-- ✅ 失败自动重试机制
+- ✅ 支持自定义 Provider 配置
 
 ## 支持的平台
 
@@ -28,7 +37,8 @@
 
    进入 `Settings` → `Secrets and variables` → `Actions` → `New repository secret`
 
-   **AnyRouter 配置：**
+   **配置方式 A：分平台配置（向后兼容）**
+
    ```json
    ANYROUTER_ACCOUNTS=[
      {
@@ -39,10 +49,7 @@
        "api_user": "12345"
      }
    ]
-   ```
 
-   **AgentRouter 配置：**
-   ```json
    AGENTROUTER_ACCOUNTS=[
      {
        "name": "AgentRouter主账号",
@@ -50,6 +57,35 @@
          "session": "your_session_cookie"
        },
        "api_user": "12345"
+     }
+   ]
+   ```
+
+   **配置方式 B：统一配置（推荐，支持多种认证）**
+
+   ```json
+   ACCOUNTS=[
+     {
+       "name": "我的AnyRouter账号",
+       "provider": "anyrouter",
+       "cookies": {"session": "xxx"},
+       "api_user": "12345"
+     },
+     {
+       "name": "我的AgentRouter账号",
+       "provider": "agentrouter",
+       "github": {
+         "username": "myuser",
+         "password": "mypass"
+       }
+     },
+     {
+       "name": "Linux.do登录",
+       "provider": "agentrouter",
+       "linux.do": {
+         "username": "user",
+         "password": "pass"
+       }
      }
    ]
    ```
@@ -67,7 +103,7 @@
       - Value: 你的 SendKey
 
    **其他通知方式（可选）**：
-   - `EMAIL_USER` + `EMAIL_PASS` + `EMAIL_TO` - 邮件通知（GitHub Actions 可能不稳定）
+   - `EMAIL_USER` + `EMAIL_PASS` + `EMAIL_TO` - 邮件通知
    - `DINGDING_WEBHOOK` - 钉钉机器人
    - `FEISHU_WEBHOOK` - 飞书机器人
    - `WEIXIN_WEBHOOK` - 企业微信
@@ -119,14 +155,16 @@ docker-compose run --rm router-checkin
 
 ## 配置说明
 
-### 账号配置方式
+### 认证方式详解
 
-#### AnyRouter / AgentRouter（Cookie 方式）
+本脚本支持三种认证方式，可以为同一账号配置多种认证方式作为备份：
 
-**重要提示：**
-- AgentRouter 使用 GitHub/LinuxDO OAuth 登录
-- 服务器重启会导致 Session 失效，需要重新获取 Cookie
-- 建议定期（每月）更新一次 Cookie
+#### 方式 1：Cookies 认证（推荐，最稳定）
+
+**优点**：最快速，最稳定
+**缺点**：Session 可能过期（通常1个月）
+
+**获取步骤：**
 
 1. **获取 Session Cookie：**
    - 打开浏览器，访问网站并登录
@@ -145,29 +183,113 @@ docker-compose run --rm router-checkin
 **配置示例：**
 ```json
 {
-  "name": "账号名称",
-  "cookies": {
-    "session": "your_session_cookie"
-  },
+  "name": "我的账号",
+  "provider": "anyrouter",
+  "cookies": {"session": "your_session_cookie"},
   "api_user": "12345"
 }
 ```
 
-### 环境变量
+#### 方式 2：GitHub OAuth 认证（AgentRouter）
+
+**优点**：无需手动更新 Cookie
+**缺点**：需要 GitHub 账号密码，首次登录可能需要 2FA
+
+**配置示例：**
+```json
+{
+  "name": "GitHub登录",
+  "provider": "agentrouter",
+  "github": {
+    "username": "your_github_username",
+    "password": "your_github_password"
+  }
+}
+```
+
+#### 方式 3：Linux.do OAuth 认证（AgentRouter）
+
+**优点**：无需手动更新 Cookie
+**缺点**：需要 Linux.do 账号
+
+**配置示例：**
+```json
+{
+  "name": "Linux.do登录",
+  "provider": "agentrouter",
+  "linux.do": {
+    "username": "your_linux_do_username",
+    "password": "your_linux_do_password"
+  }
+}
+```
+
+### 多认证方式配置（推荐）
+
+可以为同一账号配置多种认证方式，脚本会依次尝试，提高成功率：
+
+```json
+{
+  "name": "我的AgentRouter账号",
+  "provider": "agentrouter",
+  "cookies": {"session": "xxx"},
+  "api_user": "12345",
+  "github": {
+    "username": "myuser",
+    "password": "mypass"
+  },
+  "linux.do": {
+    "username": "user",
+    "password": "pass"
+  }
+}
+```
+
+### 自定义 Provider
+
+如果你有其他使用 newapi 架构的平台，可以添加自定义 Provider：
+
+```json
+PROVIDERS='{
+  "custom": {
+    "name": "自定义平台",
+    "base_url": "https://custom.example.com",
+    "login_url": "https://custom.example.com/login",
+    "checkin_url": "https://custom.example.com/api/user/checkin",
+    "user_info_url": "https://custom.example.com/api/user/self"
+  }
+}'
+```
+
+然后在账号配置中使用：
+```json
+{
+  "name": "自定义平台账号",
+  "provider": "custom",
+  "cookies": {"session": "xxx"},
+  "api_user": "12345"
+}
+```
+
+### 环境变量配置
 
 | 变量名 | 说明 | 必填 |
 |--------|------|------|
-| `ANYROUTER_ACCOUNTS` | AnyRouter 账号配置（JSON数组） | 否 |
-| `AGENTROUTER_ACCOUNTS` | AgentRouter 账号配置（JSON数组） | 否 |
+| `ANYROUTER_ACCOUNTS` | AnyRouter 账号配置（JSON数组） | 否* |
+| `AGENTROUTER_ACCOUNTS` | AgentRouter 账号配置（JSON数组） | 否* |
+| `ACCOUNTS` | 统一账号配置（支持多 Provider）| 否* |
+| `PROVIDERS` | 自定义 Provider 配置 | 否 |
 | `EMAIL_USER` | 邮件发送地址 | 否 |
 | `EMAIL_PASS` | 邮件密码/授权码 | 否 |
 | `EMAIL_TO` | 邮件接收地址 | 否 |
-| `CUSTOM_SMTP_SERVER` | 自定义 SMTP 服务器（通常不需要） | 否 |
-| `SERVERPUSHKEY` | Server酱 SendKey（推荐，访问 [ServerChan](https://sct.ftqq.com/r/18665) 获取） | 否 |
+| `CUSTOM_SMTP_SERVER` | 自定义 SMTP 服务器 | 否 |
+| `SERVERPUSHKEY` | Server酱 SendKey（[获取](https://sct.ftqq.com/r/18665)） | 否 |
 | `PUSHPLUS_TOKEN` | PushPlus Token | 否 |
 | `DINGDING_WEBHOOK` | 钉钉机器人 Webhook | 否 |
 | `FEISHU_WEBHOOK` | 飞书机器人 Webhook | 否 |
 | `WEIXIN_WEBHOOK` | 企业微信 Webhook | 否 |
+
+*至少需要配置一种账号配置方式
 
 ## 定时设置
 
