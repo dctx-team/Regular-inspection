@@ -78,6 +78,77 @@ class CookiesAuthenticator(Authenticator):
         return parsed.netloc
 
 
+class EmailAuthenticator(Authenticator):
+    """邮箱密码认证"""
+
+    async def authenticate(self, page: Page, context: BrowserContext) -> Dict[str, Any]:
+        """使用邮箱密码登录"""
+        try:
+            print(f"ℹ️ Starting Email authentication")
+
+            # 访问登录页
+            await page.goto(self.provider_config.get_login_url())
+            await page.wait_for_load_state("domcontentloaded")
+
+            # 等待登录表单加载
+            await page.wait_for_timeout(2000)
+
+            # 查找邮箱输入框
+            email_input = await page.query_selector('input[type="email"]')
+            if not email_input:
+                email_input = await page.query_selector('input[name="email"]')
+            if not email_input:
+                email_input = await page.query_selector('input[placeholder*="邮箱"]')
+            if not email_input:
+                email_input = await page.query_selector('input[placeholder*="Email"]')
+
+            if not email_input:
+                return {"success": False, "error": "Email input field not found"}
+
+            # 查找密码输入框
+            password_input = await page.query_selector('input[type="password"]')
+            if not password_input:
+                return {"success": False, "error": "Password input field not found"}
+
+            # 填写邮箱和密码
+            await email_input.fill(self.auth_config.username)
+            await password_input.fill(self.auth_config.password)
+
+            # 查找并点击登录按钮
+            login_button = await page.query_selector('button[type="submit"]')
+            if not login_button:
+                login_button = await page.query_selector('button:has-text("登录")')
+            if not login_button:
+                login_button = await page.query_selector('button:has-text("Login")')
+            if not login_button:
+                login_button = await page.query_selector('button:has-text("Sign in")')
+
+            if not login_button:
+                return {"success": False, "error": "Login button not found"}
+
+            await login_button.click()
+            await page.wait_for_load_state("networkidle", timeout=15000)
+
+            # 检查是否登录成功
+            current_url = page.url
+            if "login" in current_url.lower():
+                # 检查是否有错误提示
+                error_msg = await page.query_selector('.error, .alert-danger, [class*="error"]')
+                if error_msg:
+                    error_text = await error_msg.inner_text()
+                    return {"success": False, "error": f"Login failed: {error_text}"}
+                return {"success": False, "error": "Login failed - still on login page"}
+
+            # 获取 cookies
+            final_cookies = await context.cookies()
+            cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
+
+            return {"success": True, "cookies": cookies_dict}
+
+        except Exception as e:
+            return {"success": False, "error": f"Email auth failed: {str(e)}"}
+
+
 class GitHubAuthenticator(Authenticator):
     """GitHub OAuth 认证"""
 
@@ -201,6 +272,8 @@ def get_authenticator(auth_config: AuthConfig, provider_config: ProviderConfig) 
     """获取对应的认证器"""
     if auth_config.method == "cookies":
         return CookiesAuthenticator(auth_config, provider_config)
+    elif auth_config.method == "email":
+        return EmailAuthenticator(auth_config, provider_config)
     elif auth_config.method == "github":
         return GitHubAuthenticator(auth_config, provider_config)
     elif auth_config.method == "linux.do":
