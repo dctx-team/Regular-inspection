@@ -1,39 +1,39 @@
 {
   "anyrouter_dctx": {
-    "quota": 562.87,
-    "used": 237.13
+    "quota": 587.81,
+    "used": 237.19
   },
   "anyrouter_ljq": {
-    "quota": 600.0,
-    "used": 99.76
+    "quota": 624.33,
+    "used": 100.43
   },
   "anyrouter_zc": {
-    "quota": 602.32,
-    "used": 97.68
+    "quota": 620.61,
+    "used": 104.39
   },
   "anyrouter_linuxdo_84404": {
-    "quota": 571.86,
-    "used": 78.14
+    "quota": 590.41,
+    "used": 84.59
   },
   "anyrouter_linux_chuang": {
-    "quota": 175.0,
+    "quota": 200.0,
     "used": 0.0
   },
   "anyrouter_linux_bwj": {
-    "quota": 175.0,
+    "quota": 200.0,
     "used": 0.0
   },
   "anyrouter_linux_devbai": {
-    "quota": 150.0,
+    "quota": 175.0,
     "used": 0.0
   },
   "anyrouter_linux_Yeahnet": {
-    "quota": 150.0,
+    "quota": 175.0,
     "used": 0.0
   },
   "agentrouter_github_dctx479": {
-    "quota": 397.5,
-    "used": 467.5
+    "quota": 397.49,
+    "used": 467.51
   },
   "agentrouter_github_dctx-coder": {
     "quota": 336.99,
