@@ -33,7 +33,7 @@ class ProviderConfig:
 @dataclass
 class AuthConfig:
     """认证配置"""
-    method: str  # 'cookies' | 'github' | 'linux.do'
+    method: str  # 'cookies' | 'email' | 'github' | 'linux.do'
     username: Optional[str] = None
     password: Optional[str] = None
     cookies: Optional[Dict[str, str]] = None
@@ -62,6 +62,15 @@ class AccountConfig:
                 method="cookies",
                 cookies=data["cookies"],
                 api_user=data.get("api_user")
+            ))
+
+        # Email 认证
+        if "email" in data:
+            email_config = data["email"]
+            auth_configs.append(AuthConfig(
+                method="email",
+                username=email_config.get("username") or email_config.get("email"),
+                password=email_config.get("password")
             ))
 
         # GitHub 认证
@@ -191,7 +200,7 @@ def validate_account(account: AccountConfig, index: int) -> bool:
             if not auth.cookies or not auth.api_user:
                 print(f"❌ Account {index + 1} ({account.name}): Cookies auth requires cookies and api_user")
                 return False
-        elif auth.method in ["github", "linux.do"]:
+        elif auth.method in ["email", "github", "linux.do"]:
             if not auth.username or not auth.password:
                 print(f"❌ Account {index + 1} ({account.name}): {auth.method} auth requires username and password")
                 return False
