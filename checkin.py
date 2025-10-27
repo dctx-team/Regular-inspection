@@ -217,12 +217,25 @@ class CheckIn:
                 "Sec-Fetch-Site": "same-origin",
             }
 
-            # 添加 api_user header（如果有）
-            if auth_config.api_user:
-                headers["New-Api-User"] = str(auth_config.api_user)
-                print(f"🔑 [{self.account.name}] 使用API User: {auth_config.api_user}")
+            # 添加API User头（如果存在或可以推断）
+            api_user = auth_config.api_user
+
+            # 如果没有配置API User，尝试从账号名称推断
+            if not api_user:
+                import re
+                numbers = re.findall(r'\d+', self.account.name)
+                if numbers:
+                    api_user = numbers[0]
+                    print(f"🔍 [{self.account.name}] 从账号名称推断API User: {api_user}")
+                else:
+                    api_user = self.account.name.replace("-", "_").replace(".", "")
+                    print(f"🔍 [{self.account.name}] 使用账号名作为API User: {api_user}")
+
+            if api_user:
+                headers["New-Api-User"] = str(api_user)
+                print(f"🔑 [{self.account.name}] 使用签到API User: {api_user}")
             else:
-                print(f"⚠️ [{self.account.name}] 未配置API User")
+                print(f"⚠️ [{self.account.name}] 签到无法确定API User")
 
             # SSL验证配置
             verify_opt = False if os.getenv("DISABLE_TLS_VERIFY") == "true" else True
@@ -380,12 +393,27 @@ class CheckIn:
                 "X-Requested-With": "XMLHttpRequest"
             }
 
-            # 添加API User头（如果存在）
-            if auth_config.api_user:
-                headers["New-Api-User"] = str(auth_config.api_user)
-                print(f"🔑 [{self.account.name}] 使用API User: {auth_config.api_user}")
+            # 添加API User头（如果存在或可以推断）
+            api_user = auth_config.api_user
+
+            # 如果没有配置API User，尝试从账号名称推断（适用于某些平台）
+            if not api_user:
+                # 尝试从账号名称提取数字ID
+                import re
+                numbers = re.findall(r'\d+', self.account.name)
+                if numbers:
+                    api_user = numbers[0]  # 使用第一个找到的数字
+                    print(f"🔍 [{self.account.name}] 从账号名称推断API User: {api_user}")
+                else:
+                    # 使用账号名称作为备用方案
+                    api_user = self.account.name.replace("-", "_").replace(".", "")
+                    print(f"🔍 [{self.account.name}] 使用账号名作为API User: {api_user}")
+
+            if api_user:
+                headers["New-Api-User"] = str(api_user)
+                print(f"🔑 [{self.account.name}] 使用API User: {api_user}")
             else:
-                print(f"⚠️ [{self.account.name}] 未配置API User")
+                print(f"⚠️ [{self.account.name}] 无法确定API User")
 
             # SSL验证配置
             verify_opt = False if os.getenv("DISABLE_TLS_VERIFY") == "true" else True
