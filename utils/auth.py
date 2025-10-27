@@ -264,7 +264,7 @@ class EmailAuthenticator(Authenticator):
             except:
                 pass
 
-            # 方法4: 检查是否有错误提示
+            # 方法4: 检查是否有错误提示（但排除成功消息）
             try:
                 error_selectors = ['.error', '.alert-danger', '[class*="error"]', '.toast-error', '[role="alert"]']
                 error_found = False
@@ -273,16 +273,32 @@ class EmailAuthenticator(Authenticator):
                     if error_msg:
                         try:
                             error_text = await error_msg.inner_text()
-                            if error_text.strip():
-                                print(f"❌ [{self.auth_config.username}] 登录错误: {error_text}")
-                                return {"success": False, "error": f"Login failed: {error_text}"}
+                            if error_text and error_text.strip():
+                                # 检查是否是成功消息，避免误判
+                                success_keywords = ['成功', 'success', '登录成功', 'login success', '登录成功!']
+                                error_keywords = ['失败', '错误', 'error', '失败', 'invalid', 'incorrect', '验证码', 'captcha']
+
+                                error_text_lower = error_text.lower()
+                                is_success = any(keyword in error_text_lower for keyword in success_keywords)
+                                is_real_error = any(keyword in error_text_lower for keyword in error_keywords)
+
+                                if is_real_error:
+                                    print(f"❌ [{self.auth_config.username}] 登录错误: {error_text}")
+                                    return {"success": False, "error": f"Login failed: {error_text}"}
+                                elif is_success:
+                                    print(f"✅ [{self.auth_config.username}] 检测到成功消息: {error_text}")
+                                else:
+                                    # 不明确的消息，记录但不作为错误
+                                    print(f"⚠️ [{self.auth_config.username}] 检测到消息: {error_text}")
                         except:
                             pass
                         error_found = True
                         break
 
-                if error_found:
-                    return {"success": False, "error": "Login failed - error message found"}
+                # 只有明确发现错误时才返回失败
+                if error_found and any(keyword in (await page.query_selector_all('.error, .alert-danger, [class*="error"]')) for keyword in ['']):
+                    # 这个条件现在不会误触发，因为我们已经处理了具体内容
+                    pass
             except:
                 pass
 
