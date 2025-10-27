@@ -144,31 +144,40 @@ async def main():
                 status = "✅ SUCCESS" if success else "❌ FAILED"
                 account_result += f"  {status} 使用 {auth_method} 认证\n"
 
-                if success and user_info and user_info.get("success"):
+                if success:
+                    # 计入成功方法与账号成功标记
                     account_success = True
                     success_count += 1
                     successful_methods.append(auth_method)
-                    account_result += f"    💰 {user_info['display']}\n"
 
-                    # 记录余额信息
-                    current_quota = user_info["quota"]
-                    current_used = user_info["used"]
-                    this_account_balances[auth_method] = {
-                        "quota": current_quota,
-                        "used": current_used,
-                    }
+                    # 展示用户信息（若可用）与余额信息
+                    if user_info and user_info.get("success"):
+                        account_result += f"    💰 {user_info['display']}\n"
 
-                    # 显示余额变化
-                    if user_info.get("balance_change"):
-                        change = user_info["balance_change"]
-                        if change["recharge"] != 0 or change["used_change"] != 0:
-                            change_parts = []
-                            if change["recharge"] != 0:
-                                change_parts.append(f"充值{'+' if change['recharge'] > 0 else ''}${change['recharge']:.2f}")
-                            if change["used_change"] != 0:
-                                change_parts.append(f"使用{'+' if change['used_change'] > 0 else ''}${change['used_change']:.2f}")
-                            account_result += f"    📈 变动: {', '.join(change_parts)}\n"
+                        # 记录余额信息
+                        current_quota = user_info.get("quota")
+                        current_used = user_info.get("used")
+                        if current_quota is not None and current_used is not None:
+                            this_account_balances[auth_method] = {
+                                "quota": current_quota,
+                                "used": current_used,
+                            }
+
+                        # 显示余额变化
+                        if user_info.get("balance_change"):
+                            change = user_info["balance_change"]
+                            if change["recharge"] != 0 or change["used_change"] != 0:
+                                change_parts = []
+                                if change["recharge"] != 0:
+                                    change_parts.append(f"充值{'+' if change['recharge'] > 0 else ''}${change['recharge']:.2f}")
+                                if change["used_change"] != 0:
+                                    change_parts.append(f"使用{'+' if change['used_change'] > 0 else ''}${change['used_change']:.2f}")
+                                account_result += f"    📈 变动: {', '.join(change_parts)}\n"
+                    elif user_info and user_info.get("message"):
+                        # 签到成功但无法获取详细信息时给出简要信息
+                        account_result += f"    ℹ️ {user_info['message']}\n"
                 else:
+                    # 仅在认证/签到失败时计入失败方法
                     failed_methods.append(auth_method)
                     error_msg = user_info.get("error", "Unknown error") if user_info else "Unknown error"
                     account_result += f"    🔺 错误: {str(error_msg)[:80]}\n"

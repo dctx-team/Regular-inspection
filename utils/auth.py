@@ -5,6 +5,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 from playwright.async_api import Page, BrowserContext
+import re
 from utils.config import AuthConfig, ProviderConfig
 
 
@@ -89,20 +90,109 @@ class EmailAuthenticator(Authenticator):
             # 访问登录页
             await page.goto(self.provider_config.get_login_url())
             await page.wait_for_load_state("domcontentloaded")
+            # 等待页面主要内容渲染
+            await page.wait_for_timeout(1500)
+
+            # 如有“邮箱登录”tab，优先点击
+            for sel in [
+                'button:has-text("邮箱")',
+                'a:has-text("邮箱")',
+                'button:has-text("Email")',
+                'a:has-text("Email")',
+                'text=邮箱登录',
+                'text=Email Login',
+            ]:
+                try:
+                    el = await page.query_selector(sel)
+                    if el:
+                        await el.click()
+                        await page.wait_for_timeout(800)
+                        break
+                except:
+                    pass
 
             # 等待登录表单加载
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(1000)
+
+            # 尝试关闭可能的弹窗或覆盖层
+            try:
+                # 查找并关闭可能的弹窗按钮
+                close_selectors = [
+                    'button[aria-label="Close"]',
+                    'button[aria-label="关闭"]',
+                    '.semi-modal-close',
+                    '[class*="close"]',
+                    '[class*="modal-close"]',
+                    '.modal-close',
+                    'button:has-text("关闭")',
+                    'button:has-text("Close")',
+                    'button:has-text("跳过")',
+                    'button:has-text("Skip")',
+                ]
+
+                for close_sel in close_selectors:
+                    try:
+                        close_btn = await page.query_selector(close_sel)
+                        if close_btn and await close_btn.is_visible():
+                            await close_btn.click()
+                            await page.wait_for_timeout(500)
+                            print(f"✅ 关闭了弹窗: {close_sel}")
+                            break
+                    except:
+                        continue
+
+                # 如果还有覆盖层，尝试按 ESC 键
+                try:
+                    await page.keyboard.press('Escape')
+                    await page.wait_for_timeout(300)
+                except:
+                    pass
+
+            except Exception as e:
+                print(f"⚠️ 处理弹窗时出现异常: {e}")
+                pass
 
             # 查找邮箱输入框
-            email_input = await page.query_selector('input[type="email"]')
-            if not email_input:
-                email_input = await page.query_selector('input[name="email"]')
-            if not email_input:
-                email_input = await page.query_selector('input[placeholder*="邮箱"]')
-            if not email_input:
-                email_input = await page.query_selector('input[placeholder*="Email"]')
+            email_selectors = [
+                'input[name="username"]',
+                'input[type="email"]',
+                'input[name="email"]',
+                'input[name="account"]',
+                'input[id*="email" i]',
+                'input[placeholder*="邮箱" i]',
+                'input[placeholder*="Email" i]',
+                'input[placeholder*="用户名" i]',
+                'input[autocomplete="username"]',
+            ]
+            email_input = None
+            for sel in email_selectors:
+                try:
+                    email_input = await page.query_selector(sel)
+                    if email_input:
+                        break
+                except:
+                    continue
 
             if not email_input:
+                # 调试信息：查看页面状态
+                try:
+                    current_url = page.url
+                    page_title = await page.title()
+                    print(f"🔍 当前页面: {current_url}")
+                    print(f"🔍 页面标题: {page_title}")
+
+                    all_inputs = await page.query_selector_all('input')
+                    print(f"🔍 页面上共有 {len(all_inputs)} 个输入框:")
+                    for i, inp in enumerate(all_inputs):
+                        input_type = await inp.get_attribute('type')
+                        input_name = await inp.get_attribute('name')
+                        input_id = await inp.get_attribute('id')
+                        input_placeholder = await inp.get_attribute('placeholder')
+                        input_visible = await inp.is_visible()
+                        print(f"  {i+1}. type={input_type}, name={input_name}, id={input_id}, placeholder={input_placeholder}, visible={input_visible}")
+                except Exception as debug_e:
+                    print(f"🔍 调试失败: {debug_e}")
+
                 return {"success": False, "error": "Email input field not found"}
 
             # 查找密码输入框
@@ -115,13 +205,22 @@ class EmailAuthenticator(Authenticator):
             await password_input.fill(self.auth_config.password)
 
             # 查找并点击登录按钮
-            login_button = await page.query_selector('button[type="submit"]')
-            if not login_button:
-                login_button = await page.query_selector('button:has-text("登录")')
-            if not login_button:
-                login_button = await page.query_selector('button:has-text("Login")')
-            if not login_button:
-                login_button = await page.query_selector('button:has-text("Sign in")')
+            login_selectors = [
+                'button[type="submit"]',
+                'button:has-text("登录")',
+                'button:has-text("Login")',
+                'button:has-text("Sign in")',
+                'button:has-text("Sign In")',
+                'button.semi-button:has-text("登录")',
+            ]
+            login_button = None
+            for sel in login_selectors:
+                try:
+                    login_button = await page.query_selector(sel)
+                    if login_button:
+                        break
+                except:
+                    continue
 
             if not login_button:
                 return {"success": False, "error": "Login button not found"}
@@ -161,10 +260,20 @@ class GitHubAuthenticator(Authenticator):
             await page.goto(self.provider_config.get_login_url())
             await page.wait_for_load_state("domcontentloaded")
 
-            # 查找并点击 GitHub 登录按钮
-            github_button = await page.query_selector('button:has-text("GitHub")')
-            if not github_button:
-                github_button = await page.query_selector('a:has-text("GitHub")')
+            # 查找并点击 GitHub 登录按钮（扩展匹配）
+            github_button = None
+            for sel in [
+                'button:has-text("GitHub")',
+                'a:has-text("GitHub")',
+                'text=使用 GitHub',
+                'a[href*="github.com"]',
+            ]:
+                try:
+                    github_button = await page.query_selector(sel)
+                    if github_button:
+                        break
+                except:
+                    continue
 
             if not github_button:
                 return {"success": False, "error": "GitHub login button not found"}
@@ -202,7 +311,9 @@ class GitHubAuthenticator(Authenticator):
                     await page.wait_for_load_state("networkidle", timeout=10000)
 
             # 等待回调完成
-            await page.wait_for_url(lambda url: self.provider_config.base_url in url, timeout=20000)
+            # 等待回调到目标站点（使用正则匹配，避免不支持的 lambda 谓词）
+            target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
+            await page.wait_for_url(target_pattern, timeout=20000)
 
             # 获取 cookies
             final_cookies = await context.cookies()
@@ -226,12 +337,33 @@ class LinuxDoAuthenticator(Authenticator):
             await page.goto(self.provider_config.get_login_url())
             await page.wait_for_load_state("domcontentloaded")
 
-            # 查找并点击 LinuxDO 登录按钮
-            linux_button = await page.query_selector('button:has-text("LinuxDO")')
-            if not linux_button:
-                linux_button = await page.query_selector('a:has-text("LinuxDO")')
-            if not linux_button:
-                linux_button = await page.query_selector('button:has-text("Linux.do")')
+            # 尝试关闭可能的遮罩/公告弹窗
+            try:
+                await page.keyboard.press('Escape')
+                await page.wait_for_timeout(300)
+                close_btn = await page.query_selector('.semi-modal .semi-modal-close, [aria-label="Close"], button:has-text("关闭"), button:has-text("我知道了")')
+                if close_btn:
+                    await close_btn.click()
+                    await page.wait_for_timeout(300)
+            except:
+                pass
+
+            # 查找并点击 LinuxDO 登录按钮（扩展匹配）
+            linux_button = None
+            for sel in [
+                'button:has-text("LinuxDO")',
+                'a:has-text("LinuxDO")',
+                'button:has-text("Linux.do")',
+                'button:has-text("LinuxDO 登录")',
+                'a[href*="linux.do"]',
+                'text=使用 LinuxDO',
+            ]:
+                try:
+                    linux_button = await page.query_selector(sel)
+                    if linux_button:
+                        break
+                except:
+                    continue
 
             if not linux_button:
                 return {"success": False, "error": "LinuxDO login button not found"}
@@ -256,7 +388,9 @@ class LinuxDoAuthenticator(Authenticator):
                         await page.wait_for_load_state("networkidle", timeout=15000)
 
             # 等待回调完成
-            await page.wait_for_url(lambda url: self.provider_config.base_url in url, timeout=20000)
+            # 等待回调到目标站点（使用正则匹配，避免不支持的 lambda 谓词）
+            target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
+            await page.wait_for_url(target_pattern, timeout=20000)
 
             # 获取 cookies
             final_cookies = await context.cookies()
