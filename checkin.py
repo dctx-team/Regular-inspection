@@ -186,31 +186,114 @@ class CheckIn:
     async def _do_checkin(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Dict:
         """执行签到请求（带重试机制）"""
         try:
+            print(f"📡 [{self.account.name}] 开始签到请求...")
+            print(f"🍪 [{self.account.name}] 输入cookies数量: {len(cookies)}")
+
+            # 检查关键cookies
+            key_cookies = ["session", "sessionid", "token", "auth", "jwt"]
+            found_key_cookies = []
+            for cookie_name in key_cookies:
+                if cookie_name in cookies:
+                    found_key_cookies.append(cookie_name)
+                    print(f"   ✅ 找到关键cookie: {cookie_name}")
+
+            if not found_key_cookies:
+                print(f"   ⚠️ 未找到标准认证cookie，尝试所有可用cookies")
+                # 列出所有cookies用于调试
+                for cookie_name in list(cookies.keys())[:5]:
+                    print(f"   📄 可用cookie: {cookie_name}")
+
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
                 "Origin": self.provider.base_url,
                 "Referer": f"{self.provider.base_url}/",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-origin",
             }
 
             # 添加 api_user header（如果有）
             if auth_config.api_user:
                 headers["New-Api-User"] = str(auth_config.api_user)
+                print(f"🔑 [{self.account.name}] 使用API User: {auth_config.api_user}")
+            else:
+                print(f"⚠️ [{self.account.name}] 未配置API User")
 
-            # 可选禁用证书校验（仅用于受限环境调试）
+            # SSL验证配置
             verify_opt = False if os.getenv("DISABLE_TLS_VERIFY") == "true" else True
-            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, trust_env=False, verify=verify_opt) as client:
-                response = await client.post(
-                    self.provider.get_checkin_url(),
-                    headers=headers
-                )
+
+            print(f"🎯 [{self.account.name}] 请求URL: {self.provider.get_checkin_url()}")
+            print(f"🔧 [{self.account.name}] SSL验证: {'禁用' if not verify_opt else '启用'}")
+
+            # 创建HTTP客户端，增强配置
+            async with httpx.AsyncClient(
+                cookies=cookies,
+                timeout=30.0,
+                trust_env=False,
+                verify=verify_opt,
+                follow_redirects=True,
+                headers=headers
+            ) as client:
+
+                print(f"📤 [{self.account.name}] 发送POST请求...")
+                response = await client.post(self.provider.get_checkin_url())
+
+                print(f"📊 [{self.account.name}] 签到响应: HTTP {response.status_code}")
+
+                # 检查响应头
+                response_headers = dict(response.headers)
+                if 'set-cookie' in response_headers:
+                    print(f"🍪 [{self.account.name}] 响应包含新cookies: {response_headers['set-cookie'][:100]}...")
 
                 if response.status_code == 200:
-                    data = response.json()
-                    if data.get("success"):
-                        return {"success": True, "message": data.get("message", "签到成功")}
-                    else:
-                        return {"success": False, "message": data.get("message", "签到失败")}
+                    try:
+                        data = response.json()
+                        print(f"📋 [{self.account.name}] 签到API响应: success={data.get('success')}")
+
+                        if data.get("success"):
+                            return {"success": True, "message": data.get("message", "签到成功")}
+                        else:
+                            error_msg = data.get("message", "签到失败")
+                            print(f"❌ [{self.account.name}] 签到失败: {error_msg}")
+                            return {"success": False, "message": error_msg}
+                    except Exception as e:
+                        print(f"❌ [{self.account.name}] 解析签到响应失败: {e}")
+                        print(f"📄 [{self.account.name}] 原始响应: {response.text[:200]}...")
+                        # 检查是否是HTML响应（可能是登录页面跳转）
+                        if "html" in response.headers.get("content-type", "").lower():
+                            print(f"🔄 [{self.account.name}] 检测到HTML响应，可能需要重新登录")
+                        return {"success": False, "message": "响应解析失败"}
+
+                elif response.status_code == 401:
+                    print(f"❌ [{self.account.name}] 签到认证失败 (401)")
+                    print(f"🔍 [{self.account.name}] 检查cookies有效性...")
+
+                    # 详细诊断401错误
+                    for cookie_name in key_cookies:
+                        if cookie_name in cookies:
+                            cookie_value = cookies[cookie_name]
+                            print(f"   🍪 {cookie_name}: {cookie_value[:20]}...")
+                        else:
+                            print(f"   ❌ 缺少 {cookie_name} cookie")
+
+                    # 尝试获取当前页面信息
+                    try:
+                        page_response = await client.get(self.provider.base_url)
+                        if "login" in page_response.text.lower():
+                            print(f"🔄 [{self.account.name}] 检测到需要重新登录")
+                        return {"success": False, "message": "认证已过期，需要重新登录"}
+                    except:
+                        pass
+
+                elif response.status_code == 403:
+                    print(f"❌ [{self.account.name}] 访问被禁止 (403) - 权限不足")
+                    return {"success": False, "message": "访问被禁止"}
+
                 elif response.status_code == 404:
                     print(f"🔍 [{self.account.name}] 签到接口返回404，尝试查询用户信息进行保活...")
                     # 一些平台无签到接口，直接判断登录态与用户信息
@@ -233,7 +316,10 @@ class CheckIn:
 
                     print(f"❌ [{self.account.name}] 签到接口和用户信息查询都失败")
                     return {"success": False, "message": f"签到接口404，用户信息查询也失败"}
+
                 else:
+                    print(f"❌ [{self.account.name}] 签到请求失败: HTTP {response.status_code}")
+                    print(f"📄 [{self.account.name}] 响应内容: {response.text[:100]}...")
                     return {"success": False, "message": f"HTTP {response.status_code}"}
 
         except Exception as e:

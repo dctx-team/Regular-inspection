@@ -389,11 +389,43 @@ class GitHubAuthenticator(Authenticator):
             target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
             await page.wait_for_url(target_pattern, timeout=20000)
 
-            # 获取 cookies
+            # 获取 cookies - 增强版
             final_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
 
-            return {"success": True, "cookies": cookies_dict}
+            print(f"🍪 [{self.auth_config.username}] GitHub OAuth认证完成，获取到 {len(cookies_dict)} 个cookies")
+
+            # 检查关键认证cookies
+            key_cookies = ["session", "sessionid", "token", "auth", "jwt", "user_id", "csrf_token"]
+            found_key_cookies = []
+            for cookie_name in key_cookies:
+                if cookie_name in cookies_dict:
+                    found_key_cookies.append(cookie_name)
+                    print(f"   ✅ 找到关键cookie: {cookie_name}")
+
+            if not found_key_cookies:
+                print(f"   ⚠️ 未找到标准认证cookie，列出所有cookies:")
+                for i, (name, value) in enumerate(cookies_dict.items()):
+                    if i < 5:  # 只显示前5个
+                        print(f"      {name}: {value[:20]}...")
+                    else:
+                        print(f"      ... 还有 {len(cookies_dict) - 5} 个cookies")
+                        break
+
+            # 优先保存重要的认证cookies
+            important_cookies = {}
+            for cookie in final_cookies:
+                cookie_name = cookie["name"]
+                if any(key in cookie_name.lower() for key in ["session", "token", "auth", "user"]):
+                    important_cookies[cookie_name] = cookie["value"]
+                    print(f"   📋 保存重要cookie: {cookie_name} (domain: {cookie.get('domain', 'N/A')})")
+
+            # 如果没有找到重要cookies，返回所有cookies供API调用尝试
+            if not important_cookies:
+                important_cookies = cookies_dict
+                print(f"   🔄 返回所有cookies供API调用尝试")
+
+            return {"success": True, "cookies": important_cookies}
 
         except Exception as e:
             return {"success": False, "error": f"GitHub auth failed: {str(e)}"}
@@ -612,11 +644,43 @@ class LinuxDoAuthenticator(Authenticator):
             target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
             await page.wait_for_url(target_pattern, timeout=20000)
 
-            # 获取 cookies
+            # 获取 cookies - 增强版
             final_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
 
-            return {"success": True, "cookies": cookies_dict}
+            print(f"🍪 [{self.auth_config.username}] LinuxDO OAuth认证完成，获取到 {len(cookies_dict)} 个cookies")
+
+            # 检查关键认证cookies
+            key_cookies = ["session", "sessionid", "token", "auth", "jwt", "user_id", "csrf_token"]
+            found_key_cookies = []
+            for cookie_name in key_cookies:
+                if cookie_name in cookies_dict:
+                    found_key_cookies.append(cookie_name)
+                    print(f"   ✅ 找到关键cookie: {cookie_name}")
+
+            if not found_key_cookies:
+                print(f"   ⚠️ 未找到标准认证cookie，列出所有cookies:")
+                for i, (name, value) in enumerate(cookies_dict.items()):
+                    if i < 5:  # 只显示前5个
+                        print(f"      {name}: {value[:20]}...")
+                    else:
+                        print(f"      ... 还有 {len(cookies_dict) - 5} 个cookies")
+                        break
+
+            # 优先保存重要的认证cookies
+            important_cookies = {}
+            for cookie in final_cookies:
+                cookie_name = cookie["name"]
+                if any(key in cookie_name.lower() for key in ["session", "token", "auth", "user"]):
+                    important_cookies[cookie_name] = cookie["value"]
+                    print(f"   📋 保存重要cookie: {cookie_name} (domain: {cookie.get('domain', 'N/A')})")
+
+            # 如果没有找到重要cookies，返回所有cookies供API调用尝试
+            if not important_cookies:
+                important_cookies = cookies_dict
+                print(f"   🔄 返回所有cookies供API调用尝试")
+
+            return {"success": True, "cookies": important_cookies}
 
         except Exception as e:
             return {"success": False, "error": f"Linux.do auth failed: {str(e)}"}
