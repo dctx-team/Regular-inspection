@@ -112,7 +112,7 @@ class AppConfig:
                 name="AnyRouter",
                 base_url="https://anyrouter.top",
                 login_url="https://anyrouter.top/login",
-                checkin_url="https://anyrouter.top/api/user/checkin",
+                checkin_url="https://anyrouter.top/api/user/sign_in",
                 user_info_url="https://anyrouter.top/api/user/self"
             ),
             "agentrouter": ProviderConfig(
