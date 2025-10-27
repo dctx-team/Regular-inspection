@@ -181,8 +181,19 @@ class CheckIn:
             print(f"🍪 [{self.account.name}] 携带 {len(cookies)} 个 cookies")
 
             # 可选禁用证书校验（仅用于受限环境调试）
-            verify_opt = False if os.getenv("DISABLE_TLS_VERIFY") == "true" else True
-            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, trust_env=False, verify=verify_opt) as client:
+            # SSL验证配置：默认禁用以解决SSL握手问题，可通过环境变量ENABLE_TLS_VERIFY=true启用
+            verify_opt = os.getenv("ENABLE_TLS_VERIFY") == "true"
+
+            # 强制禁用代理，解决SSL连接问题
+            httpx_client = httpx.AsyncClient(
+                cookies=cookies,
+                timeout=30.0,
+                trust_env=False,
+                verify=verify_opt,
+                follow_redirects=True
+            )
+
+            async with httpx_client as client:
                 response = await client.post(
                     self.provider.get_checkin_url(),
                     headers=headers
@@ -225,8 +236,19 @@ class CheckIn:
             if auth_config.api_user:
                 headers["New-Api-User"] = str(auth_config.api_user)
 
-            verify_opt = False if os.getenv("DISABLE_TLS_VERIFY") == "true" else True
-            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, trust_env=False, verify=verify_opt) as client:
+            # SSL验证配置：默认禁用以解决SSL握手问题，可通过环境变量ENABLE_TLS_VERIFY=true启用
+            verify_opt = os.getenv("ENABLE_TLS_VERIFY") == "true"
+
+            # 强制禁用代理，解决SSL连接问题
+            httpx_client = httpx.AsyncClient(
+                cookies=cookies,
+                timeout=30.0,
+                trust_env=False,
+                verify=verify_opt,
+                follow_redirects=True
+            )
+
+            async with httpx_client as client:
                 response = await client.get(
                     self.provider.get_user_info_url(),
                     headers=headers

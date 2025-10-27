@@ -111,48 +111,86 @@ class EmailAuthenticator(Authenticator):
                 except:
                     pass
 
-            # 等待登录表单加载
-            await page.wait_for_timeout(1000)
+            # 智能等待页面稳定
+            await page.wait_for_load_state("domcontentloaded")
+            await page.wait_for_timeout(2000)  # 等待动态内容加载
 
-            # 尝试关闭可能的弹窗或覆盖层
-            try:
-                # 查找并关闭可能的弹窗按钮
-                close_selectors = [
-                    'button[aria-label="Close"]',
-                    'button[aria-label="关闭"]',
-                    '.semi-modal-close',
-                    '[class*="close"]',
-                    '[class*="modal-close"]',
-                    '.modal-close',
-                    'button:has-text("关闭")',
-                    'button:has-text("Close")',
-                    'button:has-text("跳过")',
-                    'button:has-text("Skip")',
-                ]
+            # 多次尝试关闭弹窗，直到没有可见的弹窗
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                popup_closed = False
 
-                for close_sel in close_selectors:
-                    try:
-                        close_btn = await page.query_selector(close_sel)
-                        if close_btn and await close_btn.is_visible():
-                            await close_btn.click()
-                            await page.wait_for_timeout(500)
-                            print(f"✅ 关闭了弹窗: {close_sel}")
-                            break
-                    except:
-                        continue
-
-                # 如果还有覆盖层，尝试按 ESC 键
                 try:
-                    await page.keyboard.press('Escape')
-                    await page.wait_for_timeout(300)
-                except:
+                    # 检测并关闭各种弹窗
+                    popup_selectors = [
+                        '.semi-modal-portal',
+                        '.semi-modal',
+                        '[role="dialog"]',
+                        '.modal',
+                        '.popup',
+                        '.overlay',
+                        '[class*="modal"]',
+                        '[class*="popup"]',
+                        '[class*="overlay"]'
+                    ]
+
+                    for popup_sel in popup_selectors:
+                        try:
+                            popups = await page.query_selector_all(popup_sel)
+                            for popup in popups:
+                                if await popup.is_visible():
+                                    print(f"🔍 发现弹窗: {popup_sel}")
+
+                                    # 查找关闭按钮
+                                    close_selectors = [
+                                        '.semi-modal-close',
+                                        'button[aria-label="Close"]',
+                                        'button[aria-label="关闭"]',
+                                        '[class*="close"]',
+                                        'button:has-text("关闭")',
+                                        'button:has-text("Close")',
+                                        'button:has-text("×")',
+                                        'button:has-text("✕")'
+                                    ]
+
+                                    for close_sel in close_selectors:
+                                        try:
+                                            close_btn = await popup.query_selector(close_sel)
+                                            if close_btn and await close_btn.is_visible():
+                                                await close_btn.click()
+                                                await page.wait_for_timeout(800)
+                                                print(f"✅ 关闭了弹窗: {close_sel}")
+                                                popup_closed = True
+                                                break
+                                        except:
+                                            continue
+
+                                    # 如果没找到关闭按钮，尝试ESC键
+                                    if not popup_closed:
+                                        try:
+                                            await page.keyboard.press('Escape')
+                                            await page.wait_for_timeout(500)
+                                            print(f"✅ 使用ESC关闭了弹窗")
+                                            popup_closed = True
+                                        except:
+                                            pass
+
+                                    break  # 处理完一个弹窗后跳出
+                        except:
+                            continue
+
+                    if not popup_closed:
+                        print(f"✅ 第{attempt + 1}次检查完成，未发现弹窗")
+                        break
+
+                    # 等待页面重新稳定
+                    await page.wait_for_timeout(1000)
+
+                except Exception as e:
+                    print(f"⚠️ 处理弹窗时出现异常: {e}")
                     pass
 
-            except Exception as e:
-                print(f"⚠️ 处理弹窗时出现异常: {e}")
-                pass
-
-            # 查找邮箱输入框
+            # 智能查找邮箱输入框，增加重试机制
             email_selectors = [
                 'input[name="username"]',
                 'input[type="email"]',
@@ -162,16 +200,47 @@ class EmailAuthenticator(Authenticator):
                 'input[placeholder*="邮箱" i]',
                 'input[placeholder*="Email" i]',
                 'input[placeholder*="用户名" i]',
+                'input[placeholder*="账号" i]',
                 'input[autocomplete="username"]',
+                'input[type="text"]',  # 最后尝试所有文本输入框
             ]
+
             email_input = None
-            for sel in email_selectors:
-                try:
-                    email_input = await page.query_selector(sel)
-                    if email_input:
-                        break
-                except:
-                    continue
+
+            # 多次尝试查找输入框
+            for attempt in range(3):
+                print(f"🔍 第{attempt + 1}次查找邮箱输入框...")
+
+                # 等待可能的动态加载
+                await page.wait_for_timeout(1000)
+
+                for sel in email_selectors:
+                    try:
+                        elements = await page.query_selector_all(sel)
+                        for element in elements:
+                            if await element.is_visible():
+                                # 检查元素是否可用
+                                input_name = await element.get_attribute('name')
+                                input_type = await element.get_attribute('type')
+                                input_placeholder = await element.get_attribute('placeholder')
+
+                                print(f"  找到输入框: name={input_name}, type={input_type}, placeholder={input_placeholder}")
+
+                                email_input = element
+                                break
+                        if email_input:
+                            break
+                    except:
+                        continue
+
+                if email_input:
+                    print(f"✅ 找到可用的邮箱输入框")
+                    break
+                else:
+                    print(f"⚠️ 第{attempt + 1}次未找到输入框，尝试刷新或等待")
+                    # 尝试滚动页面
+                    await page.keyboard.press('Home')
+                    await page.wait_for_timeout(500)
 
             if not email_input:
                 # 调试信息：查看页面状态
