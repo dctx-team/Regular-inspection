@@ -163,7 +163,7 @@ docker-compose run --rm router-checkin
 
 ## 配置说明
 
-### 认证方��详解
+### 认证方式详解
 
 本脚本支持四种认证方式，可以为同一账号配置多种认证方式作为备份：
 
@@ -351,18 +351,20 @@ schedule:
 
 ```
 Regular-inspection/
-├── main.py              # 主程序入口
-├── checkin.py           # 签到核心逻辑
-├── notify.py            # 通知模块
-├── config.py            # 配置管理
-├── requirements.txt     # Python依赖
-├── pyproject.toml       # 项目配置
-├── .env.example         # 环境变量模板
+├── main.py                    # 主程序入口
+├── checkin.py                 # 签到核心逻辑
+├── utils/
+│   ├── config.py              # 配置管理（数据类）
+│   ├── auth.py                # 认证实现
+│   └── notify.py              # 通知模块
+├── requirements.txt           # Python 依赖
+├── pyproject.toml             # 项目配置
+├── .env.example               # 环境变量模板
 ├── .github/
 │   └── workflows/
-│       └── auto-checkin.yml  # GitHub Actions配置
-├── Dockerfile           # Docker镜像
-└── docker-compose.yml   # Docker Compose配置
+│       └── auto-checkin.yml   # GitHub Actions 配置
+├── Dockerfile                 # Docker 镜像
+└── docker-compose.yml         # Docker Compose 配置
 ```
 
 ## 故障排查
@@ -374,7 +376,7 @@ Regular-inspection/
 1. **页面超时错误** - 已优化，支持多 URL fallback
 2. **401 认证失败** - 重新获取 session cookie
 3. **WAF 拦截** - 脚本自动处理
-4. **通知未收到** - 检查配置，默认仅失败时通知
+4. **通知未收到** - 检查配置，默认仅失败、首次运行或余额变化时通知
 5. **Actions 未执行** - 启用工作流，注意延迟正常
 
 > 💡 **提示：** "签到成功" 表示账号登录有效，已完成保活操作！

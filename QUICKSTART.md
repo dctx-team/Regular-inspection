@@ -210,9 +210,11 @@ uv run python main.py
 
 ### 同时配置两个平台
 
-在 GitHub Secrets 或 .env 中分别配置：
-- `ANYROUTER_ACCOUNTS` - AnyRouter 账号
-- `AGENTROUTER_ACCOUNTS` - AgentRouter 账号
+在 GitHub Secrets 或 .env 中分别配置（任选其一或并用）：
+- `ANYROUTER_ACCOUNTS` - AnyRouter 账号（JSON 数组）
+- `AGENTROUTER_ACCOUNTS` - AgentRouter 账号（JSON 数组）
+- `ACCOUNTS` - 多平台统一账号配置（JSON 数组）
+- `PROVIDERS` - 自定义 Provider（JSON 对象，可选）
 
 ## ⏰ 定时设置说明
 

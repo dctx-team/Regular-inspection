@@ -93,7 +93,11 @@ class CheckIn:
 
                     # 获取认证后的 cookies
                     auth_cookies = auth_result.get("cookies", {})
-                    print(f"✅ [{self.account.name}] 认证成功，获取到 cookies")
+                    print(f"✅ [{self.account.name}] 认证成功，获取到 {len(auth_cookies)} 个 cookies")
+                    if len(auth_cookies) > 0:
+                        # 打印前3个cookie的名字（不包含敏感值）
+                        cookie_names = list(auth_cookies.keys())[:3]
+                        print(f"🍪 [{self.account.name}] Cookie示例: {', '.join(cookie_names)}")
 
                     # 步骤 3: 执行签到
                     checkin_result = await self._do_checkin(auth_cookies, auth_config)
@@ -173,7 +177,12 @@ class CheckIn:
             if auth_config.api_user:
                 headers["New-Api-User"] = str(auth_config.api_user)
 
-            async with httpx.AsyncClient(cookies=cookies, timeout=30.0) as client:
+            print(f"📡 [{self.account.name}] 发起签到请求到: {self.provider.get_checkin_url()}")
+            print(f"🍪 [{self.account.name}] 携带 {len(cookies)} 个 cookies")
+
+            # 可选禁用证书校验（仅用于受限环境调试）
+            verify_opt = False if os.getenv("DISABLE_TLS_VERIFY") == "true" else True
+            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, trust_env=False, verify=verify_opt) as client:
                 response = await client.post(
                     self.provider.get_checkin_url(),
                     headers=headers
@@ -185,6 +194,20 @@ class CheckIn:
                         return {"success": True, "message": data.get("message", "签到成功")}
                     else:
                         return {"success": False, "message": data.get("message", "签到失败")}
+                elif response.status_code == 404:
+                    # 一些平台无签到接口，直接判断登录态与用户信息
+                    try:
+                        user_resp = await client.get(
+                            self.provider.get_user_info_url(),
+                            headers={"Accept": "application/json", "User-Agent": headers["User-Agent"]}
+                        )
+                        if user_resp.status_code == 200:
+                            data = user_resp.json()
+                            if data.get("success"):
+                                return {"success": True, "message": "签到接口不存在，已登录"}
+                    except Exception:
+                        pass
+                    return {"success": False, "message": "HTTP 404"}
                 else:
                     return {"success": False, "message": f"HTTP {response.status_code}"}
 
@@ -202,7 +225,8 @@ class CheckIn:
             if auth_config.api_user:
                 headers["New-Api-User"] = str(auth_config.api_user)
 
-            async with httpx.AsyncClient(cookies=cookies, timeout=30.0) as client:
+            verify_opt = False if os.getenv("DISABLE_TLS_VERIFY") == "true" else True
+            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, trust_env=False, verify=verify_opt) as client:
                 response = await client.get(
                     self.provider.get_user_info_url(),
                     headers=headers
