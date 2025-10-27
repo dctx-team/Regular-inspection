@@ -119,8 +119,8 @@ class AppConfig:
                 name="AgentRouter",
                 base_url="https://agentrouter.org",
                 login_url="https://agentrouter.org/login",
-                # 尝试使用标准的 checkin 接口，如果404则说明该平台可能已取消签到功能
-                checkin_url="https://agentrouter.org/api/user/checkin",
+                # AgentRouter 使用 sign_in 接口，如果404则自动查询用户信息进行保活
+                checkin_url="https://agentrouter.org/api/user/sign_in",
                 user_info_url="https://agentrouter.org/api/user/self"
             )
         }

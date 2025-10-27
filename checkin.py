@@ -212,6 +212,7 @@ class CheckIn:
                     else:
                         return {"success": False, "message": data.get("message", "签到失败")}
                 elif response.status_code == 404:
+                    print(f"🔍 [{self.account.name}] 签到接口返回404，尝试查询用户信息进行保活...")
                     # 一些平台无签到接口，直接判断登录态与用户信息
                     try:
                         user_resp = await client.get(
@@ -221,10 +222,17 @@ class CheckIn:
                         if user_resp.status_code == 200:
                             data = user_resp.json()
                             if data.get("success"):
-                                return {"success": True, "message": "签到接口不存在，已登录"}
-                    except Exception:
-                        pass
-                    return {"success": False, "message": "HTTP 404"}
+                                print(f"✅ [{self.account.name}] 用户信息查询成功，账号已保活")
+                                return {"success": True, "message": "签到接口不存在，但账号状态正常"}
+                            else:
+                                print(f"⚠️ [{self.account.name}] 用户信息查询失败: {data.get('message', 'Unknown error')}")
+                        else:
+                            print(f"⚠️ [{self.account.name}] 用户信息接口返回 {user_resp.status_code}")
+                    except Exception as e:
+                        print(f"⚠️ [{self.account.name}] 用户信息查询异常: {e}")
+
+                    print(f"❌ [{self.account.name}] 签到接口和用户信息查询都失败")
+                    return {"success": False, "message": f"签到接口404，用户信息查询也失败"}
                 else:
                     return {"success": False, "message": f"HTTP {response.status_code}"}
 
