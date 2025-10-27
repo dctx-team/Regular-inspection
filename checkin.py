@@ -325,10 +325,48 @@ class CheckIn:
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
 
+    def _expand_cookies_domain(self, cookies: Dict[str, str]) -> Dict[str, str]:
+        """扩展cookies域名匹配"""
+        expanded_cookies = {}
+        for name, value in cookies.items():
+            expanded_cookies[name] = value
+            # 为不同域名变体添加cookies
+            if self.provider.base_url:
+                domain = self.provider.base_url.replace("https://", "").replace("http://", "").split("/")[0]
+                expanded_cookies[f"{name}"] = value
+
+        return expanded_cookies
+
+    def _create_subdomain_cookies(self, cookies: Dict[str, str]) -> Dict[str, str]:
+        """创建子域名cookies"""
+        subdomain_cookies = {}
+        for name, value in cookies.items():
+            subdomain_cookies[name] = value
+            # 为根域名和子域名创建cookies
+            subdomain_cookies[name] = value
+
+        return subdomain_cookies
+
     @retry_async(max_retries=3, delay=2, backoff=2)
     async def _get_user_info(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Optional[Dict]:
         """获取用户信息和余额（带重试机制）"""
         try:
+            print(f"📡 [{self.account.name}] 开始用户信息查询...")
+            print(f"🍪 [{self.account.name}] 输入cookies数量: {len(cookies)}")
+
+            # 检查关键cookies
+            key_cookies = ["session", "sessionid", "token", "auth", "jwt"]
+            found_key_cookies = []
+            for cookie_name in key_cookies:
+                if cookie_name in cookies:
+                    found_key_cookies.append(cookie_name)
+                    print(f"   ✅ 找到关键cookie: {cookie_name}")
+
+            if not found_key_cookies:
+                print(f"   ⚠️ 未找到标准认证cookie，列出所有cookies:")
+                for cookie_name in list(cookies.keys())[:5]:
+                    print(f"   📄 可用cookie: {cookie_name}")
+
             # 更完整的请求头设置
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
@@ -338,74 +376,93 @@ class CheckIn:
                 "Referer": f"{self.provider.base_url}/",
                 "Origin": self.provider.base_url,
                 "Cache-Control": "no-cache",
-                "Pragma": "no-cache"
+                "Pragma": "no-cache",
+                "X-Requested-With": "XMLHttpRequest"
             }
 
             # 添加API User头（如果存在）
             if auth_config.api_user:
                 headers["New-Api-User"] = str(auth_config.api_user)
                 print(f"🔑 [{self.account.name}] 使用API User: {auth_config.api_user}")
+            else:
+                print(f"⚠️ [{self.account.name}] 未配置API User")
 
             # SSL验证配置
             verify_opt = False if os.getenv("DISABLE_TLS_VERIFY") == "true" else True
 
-            print(f"📡 [{self.account.name}] 请求用户信息: {self.provider.get_user_info_url()}")
-            print(f"🍪 [{self.account.name}] 携带 {len(cookies)} 个 cookies")
+            print(f"🎯 [{self.account.name}] 请求URL: {self.provider.get_user_info_url()}")
 
-            # 创建HTTP客户端
-            async with httpx.AsyncClient(
-                cookies=cookies,
-                timeout=30.0,
-                trust_env=False,
-                verify=verify_opt,
-                follow_redirects=True,
-                headers=headers
-            ) as client:
+            # 尝试不同的cookies策略
+            cookie_strategies = [
+                ("原始cookies", cookies),
+                ("扩展域名cookies", self._expand_cookies_domain(cookies)),
+                ("子域名cookies", self._create_subdomain_cookies(cookies)),
+            ]
 
-                response = await client.get(self.provider.get_user_info_url())
+            for strategy_name, strategy_cookies in cookie_strategies:
+                print(f"🔄 [{self.account.name}] 尝试策略: {strategy_name}")
+                print(f"   🍪 使用cookies数量: {len(strategy_cookies)}")
 
-                print(f"📊 [{self.account.name}] 用户信息响应: HTTP {response.status_code}")
+                try:
+                    # 创建HTTP客户端
+                    async with httpx.AsyncClient(
+                        cookies=strategy_cookies,
+                        timeout=30.0,
+                        trust_env=False,
+                        verify=verify_opt,
+                        follow_redirects=True,
+                        headers=headers
+                    ) as client:
 
-                if response.status_code == 200:
-                    try:
-                        data = response.json()
-                        print(f"📋 [{self.account.name}] API响应: success={data.get('success')}")
+                        response = await client.get(self.provider.get_user_info_url())
+                        print(f"   📊 用户信息响应: HTTP {response.status_code}")
 
-                        if data.get("success") and data.get("data"):
-                            user_data = data["data"]
-                            quota = user_data.get("quota", 0) / 500000  # 转换为美元
-                            used_quota = user_data.get("used_quota", 0) / 500000
+                        if response.status_code == 200:
+                            try:
+                                data = response.json()
+                                print(f"   📋 API响应: success={data.get('success')}")
 
-                            return {
-                                "success": True,
-                                "quota": round(quota, 2),
-                                "used": round(used_quota, 2),
-                                "display": f"余额: ${quota:.2f}, 已用: ${used_quota:.2f}"
-                            }
+                                if data.get("success") and data.get("data"):
+                                    user_data = data["data"]
+                                    quota = user_data.get("quota", 0) / 500000  # 转换为美元
+                                    used_quota = user_data.get("used_quota", 0) / 500000
+
+                                    print(f"   ✅ [{self.account.name}] 用户信息获取成功!")
+                                    return {
+                                        "success": True,
+                                        "quota": round(quota, 2),
+                                        "used": round(used_quota, 2),
+                                        "display": f"余额: ${quota:.2f}, 已用: ${used_quota:.2f}"
+                                    }
+                                else:
+                                    error_msg = data.get("message", "未知错误")
+                                    print(f"   ❌ API返回失败: {error_msg}")
+                            except Exception as e:
+                                print(f"   ❌ 解析响应失败: {e}")
+                                print(f"   📄 原始响应: {response.text[:200]}...")
+
+                        elif response.status_code == 401:
+                            print(f"   ❌ 认证失败 (401) - {strategy_name}失败")
+                            # 继续尝试下一个策略
+
+                        elif response.status_code == 403:
+                            print(f"   ❌ 访问被禁止 (403)")
+                            return None
+
+                        elif response.status_code == 404:
+                            print(f"   ⚠️ 用户信息接口不存在 (404)")
+                            return None
+
                         else:
-                            error_msg = data.get("message", "未知错误")
-                            print(f"❌ [{self.account.name}] API返回失败: {error_msg}")
-                    except Exception as e:
-                        print(f"❌ [{self.account.name}] 解析响应失败: {e}")
-                        print(f"📄 [{self.account.name}] 原始响应: {response.text[:200]}...")
+                            print(f"   ❌ HTTP错误: {response.status_code}")
+                            print(f"   📄 响应内容: {response.text[:100]}...")
 
-                elif response.status_code == 401:
-                    print(f"❌ [{self.account.name}] 认证失败 (401) - cookies可能已过期")
-                    print(f"🔍 [{self.account.name}] 检查关键cookies...")
-                    for cookie_name in ["session", "sessionid", "token", "auth"]:
-                        if cookie_name in cookies:
-                            print(f"   ✅ {cookie_name}: {cookies[cookie_name][:20]}...")
-                        else:
-                            print(f"   ❌ 缺少 {cookie_name} cookie")
+                except Exception as e:
+                    print(f"   ❌ {strategy_name} 请求异常: {e}")
+                    continue
 
-                elif response.status_code == 403:
-                    print(f"❌ [{self.account.name}] 访问被禁止 (403) - 可能权限不足")
-
-                else:
-                    print(f"❌ [{self.account.name}] HTTP错误: {response.status_code}")
-                    print(f"📄 [{self.account.name}] 响应内容: {response.text[:100]}...")
-
-            return None
+            # 所有策略都失败
+            print(f"   💥 [{self.account.name}] 所有cookies策略都失败了")
 
         except Exception as e:
             print(f"⚠️ [{self.account.name}] 获取用户信息失败: {str(e)}")
