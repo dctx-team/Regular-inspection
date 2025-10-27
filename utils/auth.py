@@ -222,23 +222,85 @@ class EmailAuthenticator(Authenticator):
             if not login_button:
                 return {"success": False, "error": "Login button not found"}
 
+            print(f"🔑 [{self.auth_config.username}] 点击登录按钮...")
             await login_button.click()
-            await page.wait_for_load_state("networkidle", timeout=15000)
 
-            # 检查是否登录成功
+            # 等待页面跳转或响应
+            try:
+                # 等待页面变化，可能是跳转或内容更新
+                await page.wait_for_load_state("networkidle", timeout=10000)
+                await page.wait_for_timeout(2000)  # 额外等待确保页面稳定
+            except Exception:
+                print(f"⚠️ [{self.auth_config.username}] 页面加载超时，继续检查登录状态...")
+
+            # 多种方式检查登录是否成功
             current_url = page.url
+            print(f"🔍 [{self.auth_config.username}] 登录后URL: {current_url}")
+
+            # 方法1: 检查URL变化
+            if "login" not in current_url.lower():
+                print(f"✅ [{self.auth_config.username}] URL已变化，登录可能成功")
+            else:
+                print(f"⚠️ [{self.auth_config.username}] 仍在登录页面，检查其他登录指标...")
+
+            # 方法2: 检查页面标题变化
+            try:
+                page_title = await page.title()
+                print(f"🔍 [{self.auth_config.username}] 页面标题: {page_title}")
+                if "login" not in page_title.lower() and "console" in page_title.lower():
+                    print(f"✅ [{self.auth_config.username}] 页面标题显示已登录")
+                else:
+                    print(f"⚠️ [{self.auth_config.username}] 页面标题未显示登录")
+            except:
+                pass
+
+            # 方法3: 检查是否有用户信息相关元素
+            try:
+                user_elements = await page.query_selector_all('[class*="user"], [class*="avatar"], [class*="profile"], button:has-text("退出"), button:has-text("Logout")')
+                if user_elements:
+                    print(f"✅ [{self.auth_config.username}] 找到用户界面元素，登录成功")
+                else:
+                    print(f"⚠️ [{self.auth_config.username}] 未找到用户界面元素")
+            except:
+                pass
+
+            # 方法4: 检查是否有错误提示
+            try:
+                error_selectors = ['.error', '.alert-danger', '[class*="error"]', '.toast-error', '[role="alert"]']
+                error_found = False
+                for sel in error_selectors:
+                    error_msg = await page.query_selector(sel)
+                    if error_msg:
+                        try:
+                            error_text = await error_msg.inner_text()
+                            if error_text.strip():
+                                print(f"❌ [{self.auth_config.username}] 登录错误: {error_text}")
+                                return {"success": False, "error": f"Login failed: {error_text}"}
+                        except:
+                            pass
+                        error_found = True
+                        break
+
+                if error_found:
+                    return {"success": False, "error": "Login failed - error message found"}
+            except:
+                pass
+
+            # 最终判断：如果还在登录页，但没找到明确错误，可能是验证码或其他问题
             if "login" in current_url.lower():
-                # 检查是否有错误提示
-                error_msg = await page.query_selector('.error, .alert-danger, [class*="error"]')
-                if error_msg:
-                    error_text = await error_msg.inner_text()
-                    return {"success": False, "error": f"Login failed: {error_text}"}
-                return {"success": False, "error": "Login failed - still on login page"}
+                print(f"❌ [{self.auth_config.username}] 仍在登录页面，可能需要验证码或登录失败")
+                return {"success": False, "error": "Login failed - still on login page (may need captcha)"}
 
             # 获取 cookies
+            print(f"🍪 [{self.auth_config.username}] 获取登录cookies...")
             final_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
 
+            # 检查是否有session cookie
+            if "session" not in cookies_dict and "sessionid" not in cookies_dict:
+                print(f"⚠️ [{self.auth_config.username}] 未找到session cookie，但继续尝试...")
+
+            print(f"✅ [{self.auth_config.username}] 邮箱认证完成，获取到 {len(cookies_dict)} 个cookies")
             return {"success": True, "cookies": cookies_dict}
 
         except Exception as e:
@@ -406,22 +468,106 @@ class LinuxDoAuthenticator(Authenticator):
             except:
                 pass
 
-            # 查找并点击 LinuxDO 登录按钮（扩展匹配）
+            # 查找并点击 LinuxDO 登录按钮（增强匹配）
+            print(f"🔍 [{self.auth_config.username}] 查找LinuxDO登录按钮...")
             linux_button = None
-            for sel in [
+            found_selector = None
+
+            # 扩展的登录按钮选择器
+            selectors = [
+                # 精确匹配
                 'button:has-text("LinuxDO")',
                 'a:has-text("LinuxDO")',
                 'button:has-text("Linux.do")',
                 'button:has-text("LinuxDO 登录")',
-                'a[href*="linux.do"]',
+                'a:has-text("使用 LinuxDO")',
                 'text=使用 LinuxDO',
-            ]:
+                'button:has-text("LinuxDO 账号登录")',
+
+                # 模糊匹配
+                'button:has-text("Linux")',
+                'a:has-text("Linux")',
+                'button:has-text("DO")',
+                'a:has-text("DO")',
+
+                # 链接匹配
+                'a[href*="linux.do"]',
+                'a[href*="linuxdo"]',
+                'button[onclick*="linux"]',
+
+                # 图标或类名匹配
+                '[class*="linux"]',
+                '[class*="linuxdo"]',
+                '[data-provider*="linux"]',
+
+                # 第三方OAuth通用匹配
+                'button:has-text("第三方登录")',
+                'button:has-text("其他登录方式")',
+                'button:has-text("更多登录")',
+                '.oauth-login button',
+                '.third-party-login button',
+            ]
+
+            # 先等待页面完全加载
+            await page.wait_for_timeout(2000)
+
+            for sel in selectors:
                 try:
                     linux_button = await page.query_selector(sel)
                     if linux_button:
+                        found_selector = sel
+                        print(f"✅ [{self.auth_config.username}] 找到LinuxDO登录选项: {sel}")
                         break
                 except:
                     continue
+
+            if not linux_button:
+                # 调试信息：输出页面当前内容
+                try:
+                    page_title = await page.title()
+                    page_url = page.url
+                    print(f"❌ [{self.auth_config.username}] LinuxDO登录按钮未找到")
+                    print(f"   当前页面: {page_title}")
+                    print(f"   当前URL: {page_url}")
+
+                    # 查找所有按钮和链接
+                    all_buttons = await page.query_selector_all('button, a[href]')
+                    print(f"   页面共有 {len(all_buttons)} 个按钮/链接")
+
+                    # 显示前几个按钮的文本
+                    for i, btn in enumerate(all_buttons[:8]):
+                        try:
+                            btn_text = await btn.inner_text()
+                            btn_tag = await btn.evaluate('el => el.tagName.toLowerCase()')
+                            if btn_text and btn_text.strip():
+                                print(f"     {btn_tag}: {btn_text.strip()[:50]}")
+                        except:
+                            print(f"     按钮{i+1}: 无法获取文本")
+
+                    # 如果仍然没找到，尝试点击可能的登录区域
+                    login_containers = await page.query_selector_all('.login, .auth, .oauth, .third-party')
+                    if login_containers:
+                        print(f"   找到 {len(login_containers)} 个可能的登录容器")
+                        for i, container in enumerate(login_containers[:2]):
+                            try:
+                                # 尝试点击容器内的第一个按钮
+                                first_btn = await container.query_selector('button, a')
+                                if first_btn:
+                                    btn_text = await first_btn.inner_text()
+                                    print(f"   尝试点击容器内按钮: {btn_text.strip()[:30]}")
+                                    await first_btn.click()
+                                    await page.wait_for_timeout(2000)
+
+                                    # 检查是否跳转到Linux.do
+                                    if "linux.do" in page.url:
+                                        print(f"✅ [{self.auth_config.username}] 通过容器按钮成功跳转到Linux.do")
+                                        linux_button = first_btn
+                                        found_selector = f"container button ({btn_text.strip()[:20]})"
+                                        break
+                            except:
+                                continue
+                except Exception as e:
+                    print(f"   调试信息获取失败: {e}")
 
             if not linux_button:
                 return {"success": False, "error": "LinuxDO login button not found"}
