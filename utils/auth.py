@@ -89,13 +89,38 @@ class EmailAuthenticator(Authenticator):
         try:
             print(f"ℹ️ Starting Email authentication")
 
+            print(f"🔍 [{self.auth_config.username}] 访问登录页: {self.provider_config.get_login_url()}")
             # 访问登录页
             await page.goto(self.provider_config.get_login_url())
             await page.wait_for_load_state("domcontentloaded")
             # 等待页面主要内容渲染
             await page.wait_for_timeout(1500)
 
-            # 如有“邮箱登录”tab，优先点击
+            # 尝试关闭可能的弹窗
+            try:
+                await page.keyboard.press('Escape')
+                await page.wait_for_timeout(300)
+                close_selectors = [
+                    '.semi-modal .semi-modal-close',
+                    '[aria-label="Close"]',
+                    'button:has-text("关闭")',
+                    'button:has-text("我知道了")',
+                    'button:has-text("取消")',
+                ]
+                for sel in close_selectors:
+                    try:
+                        close_btn = await page.query_selector(sel)
+                        if close_btn:
+                            await close_btn.click()
+                            await page.wait_for_timeout(300)
+                            break
+                    except:
+                        continue
+            except:
+                pass
+
+            # 如有"邮箱登录"tab，优先点击
+            print(f"🔍 [{self.auth_config.username}] 查找邮箱登录选项...")
             for sel in [
                 'button:has-text("邮箱")',
                 'a:has-text("邮箱")',
@@ -107,16 +132,18 @@ class EmailAuthenticator(Authenticator):
                 try:
                     el = await page.query_selector(sel)
                     if el:
+                        print(f"✅ [{self.auth_config.username}] 找到邮箱登录选项: {sel}")
                         await el.click()
                         await page.wait_for_timeout(800)
                         break
                 except:
-                    pass
+                    continue
 
             # 等待登录表单加载
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(2000)
 
             # 查找邮箱输入框
+            print(f"🔍 [{self.auth_config.username}] 查找邮箱输入框...")
             email_selectors = [
                 'input[type="email"]',
                 'input[name="email"]',
@@ -125,18 +152,44 @@ class EmailAuthenticator(Authenticator):
                 'input[id*="email" i]',
                 'input[placeholder*="邮箱" i]',
                 'input[placeholder*="Email" i]',
+                'input[placeholder*="用户名" i]',
                 'input[autocomplete="username"]',
             ]
             email_input = None
+            found_selector = None
             for sel in email_selectors:
                 try:
                     email_input = await page.query_selector(sel)
                     if email_input:
+                        found_selector = sel
+                        print(f"✅ [{self.auth_config.username}] 找到邮箱输入框: {sel}")
                         break
                 except:
                     continue
 
             if not email_input:
+                # 调试信息：输出页面当前内容
+                try:
+                    page_title = await page.title()
+                    page_url = page.url
+                    print(f"❌ [{self.auth_config.username}] 邮箱输入框未找到")
+                    print(f"   当前页面: {page_title}")
+                    print(f"   当前URL: {page_url}")
+
+                    # 查找所有输入框
+                    all_inputs = await page.query_selector_all('input')
+                    print(f"   页面共有 {len(all_inputs)} 个输入框")
+                    for i, inp in enumerate(all_inputs[:5]):  # 只显示前5个
+                        try:
+                            inp_type = await inp.get_attribute('type')
+                            inp_name = await inp.get_attribute('name')
+                            inp_placeholder = await inp.get_attribute('placeholder')
+                            print(f"     输入框{i+1}: type={inp_type}, name={inp_name}, placeholder={inp_placeholder}")
+                        except:
+                            print(f"     输入框{i+1}: 无法获取属性")
+                except Exception as e:
+                    print(f"   调试信息获取失败: {e}")
+
                 return {"success": False, "error": "Email input field not found"}
 
             # 查找密码输入框
