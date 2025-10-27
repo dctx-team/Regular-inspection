@@ -10,12 +10,35 @@ import json
 import os
 import tempfile
 from typing import Dict, List, Tuple, Optional
+from functools import wraps
 
 import httpx
 from playwright.async_api import async_playwright, Page, BrowserContext
 
 from utils.config import AccountConfig, ProviderConfig, AuthConfig
 from utils.auth import get_authenticator
+
+
+def retry_async(max_retries=3, delay=2, backoff=2):
+    """异步重试装饰器"""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt == max_retries - 1:
+                        print(f"❌ 重试 {max_retries} 次后仍然失败: {e}")
+                        raise e
+                    wait_time = delay * (backoff ** attempt)
+                    print(f"⚠️ 尝试 {attempt + 1}/{max_retries} 失败，{wait_time}秒后重试: {e}")
+                    await asyncio.sleep(wait_time)
+            raise last_exception
+        return wrapper
+    return decorator
 
 
 class CheckIn:
@@ -159,8 +182,9 @@ class CheckIn:
             print(f"⚠️ [{self.account.name}] 获取 WAF cookies 失败: {str(e)}")
             return {}
 
+    @retry_async(max_retries=3, delay=2, backoff=2)
     async def _do_checkin(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Dict:
-        """执行签到请求"""
+        """执行签到请求（带重试机制）"""
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -173,7 +197,9 @@ class CheckIn:
             if auth_config.api_user:
                 headers["New-Api-User"] = str(auth_config.api_user)
 
-            async with httpx.AsyncClient(cookies=cookies, timeout=30.0) as client:
+            # 可选禁用证书校验（仅用于受限环境调试）
+            verify_opt = False if os.getenv("DISABLE_TLS_VERIFY") == "true" else True
+            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, trust_env=False, verify=verify_opt) as client:
                 response = await client.post(
                     self.provider.get_checkin_url(),
                     headers=headers
@@ -185,14 +211,29 @@ class CheckIn:
                         return {"success": True, "message": data.get("message", "签到成功")}
                     else:
                         return {"success": False, "message": data.get("message", "签到失败")}
+                elif response.status_code == 404:
+                    # 一些平台无签到接口，直接判断登录态与用户信息
+                    try:
+                        user_resp = await client.get(
+                            self.provider.get_user_info_url(),
+                            headers={"Accept": "application/json", "User-Agent": headers["User-Agent"]}
+                        )
+                        if user_resp.status_code == 200:
+                            data = user_resp.json()
+                            if data.get("success"):
+                                return {"success": True, "message": "签到接口不存在，已登录"}
+                    except Exception:
+                        pass
+                    return {"success": False, "message": "HTTP 404"}
                 else:
                     return {"success": False, "message": f"HTTP {response.status_code}"}
 
         except Exception as e:
             return {"success": False, "message": f"请求异常: {str(e)}"}
 
+    @retry_async(max_retries=3, delay=2, backoff=2)
     async def _get_user_info(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Optional[Dict]:
-        """获取用户信息和余额"""
+        """获取用户信息和余额（带重试机制）"""
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -202,7 +243,8 @@ class CheckIn:
             if auth_config.api_user:
                 headers["New-Api-User"] = str(auth_config.api_user)
 
-            async with httpx.AsyncClient(cookies=cookies, timeout=30.0) as client:
+            verify_opt = False if os.getenv("DISABLE_TLS_VERIFY") == "true" else True
+            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, trust_env=False, verify=verify_opt) as client:
                 response = await client.get(
                     self.provider.get_user_info_url(),
                     headers=headers

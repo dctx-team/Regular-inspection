@@ -2,9 +2,12 @@
 认证模块 - 处理不同的认证方式
 """
 
+import os
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
 from playwright.async_api import Page, BrowserContext
+import re
 from utils.config import AuthConfig, ProviderConfig
 
 
@@ -89,18 +92,49 @@ class EmailAuthenticator(Authenticator):
             # 访问登录页
             await page.goto(self.provider_config.get_login_url())
             await page.wait_for_load_state("domcontentloaded")
+            # 等待页面主要内容渲染
+            await page.wait_for_timeout(1500)
+
+            # 如有“邮箱登录”tab，优先点击
+            for sel in [
+                'button:has-text("邮箱")',
+                'a:has-text("邮箱")',
+                'button:has-text("Email")',
+                'a:has-text("Email")',
+                'text=邮箱登录',
+                'text=Email Login',
+            ]:
+                try:
+                    el = await page.query_selector(sel)
+                    if el:
+                        await el.click()
+                        await page.wait_for_timeout(800)
+                        break
+                except:
+                    pass
 
             # 等待登录表单加载
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(1000)
 
             # 查找邮箱输入框
-            email_input = await page.query_selector('input[type="email"]')
-            if not email_input:
-                email_input = await page.query_selector('input[name="email"]')
-            if not email_input:
-                email_input = await page.query_selector('input[placeholder*="邮箱"]')
-            if not email_input:
-                email_input = await page.query_selector('input[placeholder*="Email"]')
+            email_selectors = [
+                'input[type="email"]',
+                'input[name="email"]',
+                'input[name="username"]',
+                'input[name="account"]',
+                'input[id*="email" i]',
+                'input[placeholder*="邮箱" i]',
+                'input[placeholder*="Email" i]',
+                'input[autocomplete="username"]',
+            ]
+            email_input = None
+            for sel in email_selectors:
+                try:
+                    email_input = await page.query_selector(sel)
+                    if email_input:
+                        break
+                except:
+                    continue
 
             if not email_input:
                 return {"success": False, "error": "Email input field not found"}
@@ -115,13 +149,22 @@ class EmailAuthenticator(Authenticator):
             await password_input.fill(self.auth_config.password)
 
             # 查找并点击登录按钮
-            login_button = await page.query_selector('button[type="submit"]')
-            if not login_button:
-                login_button = await page.query_selector('button:has-text("登录")')
-            if not login_button:
-                login_button = await page.query_selector('button:has-text("Login")')
-            if not login_button:
-                login_button = await page.query_selector('button:has-text("Sign in")')
+            login_selectors = [
+                'button[type="submit"]',
+                'button:has-text("登录")',
+                'button:has-text("Login")',
+                'button:has-text("Sign in")',
+                'button:has-text("Sign In")',
+                'button.semi-button:has-text("登录")',
+            ]
+            login_button = None
+            for sel in login_selectors:
+                try:
+                    login_button = await page.query_selector(sel)
+                    if login_button:
+                        break
+                except:
+                    continue
 
             if not login_button:
                 return {"success": False, "error": "Login button not found"}
@@ -161,10 +204,20 @@ class GitHubAuthenticator(Authenticator):
             await page.goto(self.provider_config.get_login_url())
             await page.wait_for_load_state("domcontentloaded")
 
-            # 查找并点击 GitHub 登录按钮
-            github_button = await page.query_selector('button:has-text("GitHub")')
-            if not github_button:
-                github_button = await page.query_selector('a:has-text("GitHub")')
+            # 查找并点击 GitHub 登录按钮（扩展匹配）
+            github_button = None
+            for sel in [
+                'button:has-text("GitHub")',
+                'a:has-text("GitHub")',
+                'text=使用 GitHub',
+                'a[href*="github.com"]',
+            ]:
+                try:
+                    github_button = await page.query_selector(sel)
+                    if github_button:
+                        break
+                except:
+                    continue
 
             if not github_button:
                 return {"success": False, "error": "GitHub login button not found"}
@@ -190,10 +243,9 @@ class GitHubAuthenticator(Authenticator):
 
                 # 处理 2FA（如果需要）
                 if "two-factor" in page.url or "2fa" in page.url.lower():
-                    print("⚠️ GitHub 2FA required - please check logs for OTP link")
-                    # 这里可以实现 2FA 处理逻辑
-                    # 参考项目有完整实现，可以按需添加
-                    return {"success": False, "error": "2FA required - not implemented yet"}
+                    print("🔐 GitHub 2FA required - attempting to handle")
+                    if not await self._handle_2fa(page):
+                        return {"success": False, "error": "2FA authentication failed"}
 
                 # 点击授权按钮（如果有）
                 authorize_button = await page.query_selector('button[name="authorize"]')
@@ -202,7 +254,9 @@ class GitHubAuthenticator(Authenticator):
                     await page.wait_for_load_state("networkidle", timeout=10000)
 
             # 等待回调完成
-            await page.wait_for_url(lambda url: self.provider_config.base_url in url, timeout=20000)
+            # 等待回调到目标站点（使用正则匹配，避免不支持的 lambda 谓词）
+            target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
+            await page.wait_for_url(target_pattern, timeout=20000)
 
             # 获取 cookies
             final_cookies = await context.cookies()
@@ -212,6 +266,68 @@ class GitHubAuthenticator(Authenticator):
 
         except Exception as e:
             return {"success": False, "error": f"GitHub auth failed: {str(e)}"}
+
+    async def _handle_2fa(self, page: Page) -> bool:
+        """处理 GitHub 2FA 认证"""
+        try:
+            print("🔐 处理 GitHub 2FA 认证...")
+
+            # 等待 2FA 输入框出现
+            await page.wait_for_selector('input[name="otp"]', timeout=10000)
+
+            # 方法1: 从环境变量获取预先生成的 2FA 代码
+            otp_code = os.getenv('GITHUB_2FA_CODE')
+            if otp_code:
+                print("📱 使用环境变量中的 2FA 代码")
+                await page.fill('input[name="otp"]', otp_code)
+                await page.click('button[type="submit"]', timeout=5000)
+                await page.wait_for_load_state("networkidle", timeout=10000)
+                return True
+
+            # 方法2: 使用 TOTP 密钥生成代码
+            totp_secret = os.getenv('GITHUB_TOTP_SECRET')
+            if totp_secret:
+                print("🔑 使用 TOTP 密钥生成 2FA 代码")
+                try:
+                    import pyotp
+                    totp = pyotp.TOTP(totp_secret)
+                    otp_code = totp.now()
+                    print(f"🔢 生成的 2FA 代码: {otp_code}")
+                    await page.fill('input[name="otp"]', otp_code)
+                    await page.click('button[type="submit"]', timeout=5000)
+                    await page.wait_for_load_state("networkidle", timeout=10000)
+                    return True
+                except ImportError:
+                    print("❌ 需要安装 pyotp 库: pip install pyotp")
+                except Exception as e:
+                    print(f"❌ TOTP 生成失败: {e}")
+
+            # 方法3: 尝试常见的备用恢复代码
+            recovery_codes_str = os.getenv('GITHUB_RECOVERY_CODES')
+            if recovery_codes_str:
+                recovery_codes = recovery_codes_str.split(',')
+                print(f"🔄 尝试使用恢复代码 (剩余 {len(recovery_codes)} 个)")
+                for i, code in enumerate(recovery_codes):
+                    try:
+                        await page.fill('input[name="otp"]', code.strip())
+                        await page.click('button[type="submit"]', timeout=5000)
+                        await page.wait_for_load_state("networkidle", timeout=10000)
+                        print(f"✅ 恢复代码 {i+1} 验证成功")
+                        return True
+                    except:
+                        print(f"❌ 恢复代码 {i+1} 验证失败，尝试下一个...")
+                        await page.wait_for_timeout(1000)
+                        continue
+
+            print("❌ 无法自动处理 2FA，请手动处理或配置以下环境变量:")
+            print("   - GITHUB_2FA_CODE: 预先生成的 2FA 代码")
+            print("   - GITHUB_TOTP_SECRET: TOTP 密钥")
+            print("   - GITHUB_RECOVERY_CODES: 恢复代码列表 (逗号分隔)")
+            return False
+
+        except Exception as e:
+            print(f"❌ 2FA 处理异常: {e}")
+            return False
 
 
 class LinuxDoAuthenticator(Authenticator):
@@ -226,12 +342,33 @@ class LinuxDoAuthenticator(Authenticator):
             await page.goto(self.provider_config.get_login_url())
             await page.wait_for_load_state("domcontentloaded")
 
-            # 查找并点击 LinuxDO 登录按钮
-            linux_button = await page.query_selector('button:has-text("LinuxDO")')
-            if not linux_button:
-                linux_button = await page.query_selector('a:has-text("LinuxDO")')
-            if not linux_button:
-                linux_button = await page.query_selector('button:has-text("Linux.do")')
+            # 尝试关闭可能的遮罩/公告弹窗
+            try:
+                await page.keyboard.press('Escape')
+                await page.wait_for_timeout(300)
+                close_btn = await page.query_selector('.semi-modal .semi-modal-close, [aria-label="Close"], button:has-text("关闭"), button:has-text("我知道了")')
+                if close_btn:
+                    await close_btn.click()
+                    await page.wait_for_timeout(300)
+            except:
+                pass
+
+            # 查找并点击 LinuxDO 登录按钮（扩展匹配）
+            linux_button = None
+            for sel in [
+                'button:has-text("LinuxDO")',
+                'a:has-text("LinuxDO")',
+                'button:has-text("Linux.do")',
+                'button:has-text("LinuxDO 登录")',
+                'a[href*="linux.do"]',
+                'text=使用 LinuxDO',
+            ]:
+                try:
+                    linux_button = await page.query_selector(sel)
+                    if linux_button:
+                        break
+                except:
+                    continue
 
             if not linux_button:
                 return {"success": False, "error": "LinuxDO login button not found"}
@@ -256,7 +393,9 @@ class LinuxDoAuthenticator(Authenticator):
                         await page.wait_for_load_state("networkidle", timeout=15000)
 
             # 等待回调完成
-            await page.wait_for_url(lambda url: self.provider_config.base_url in url, timeout=20000)
+            # 等待回调到目标站点（使用正则匹配，避免不支持的 lambda 谓词）
+            target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
+            await page.wait_for_url(target_pattern, timeout=20000)
 
             # 获取 cookies
             final_cookies = await context.cookies()

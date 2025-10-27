@@ -36,10 +36,11 @@ Regular-inspection/
 
 ### 3. 支持多种认证方式
 - **之前**：仅支持 Cookies
-- **现���**：支持 3 种认证方式
+- **现在**：支持 4 种认证方式
   - Cookies 认证（最快，最稳定）
-  - GitHub OAuth 认证
-  - Linux.do OAuth 认证
+  - 邮箱密码认证（AnyRouter）
+  - GitHub OAuth 认证（AgentRouter）
+  - Linux.do OAuth 认证（AgentRouter）
   - 可为同一账号配置多种认证作为备份
 
 ### 4. Provider 抽象化
