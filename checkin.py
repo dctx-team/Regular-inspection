@@ -85,19 +85,44 @@ class CheckIn:
 
         async with async_playwright() as p:
             with tempfile.TemporaryDirectory() as temp_dir:
-                # 启动浏览器
-                context = await p.chromium.launch_persistent_context(
-                    user_data_dir=temp_dir,
-                    headless=True,
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                    viewport={"width": 1920, "height": 1080},
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-dev-shm-usage",
-                        "--disable-web-security",
-                        "--no-sandbox",
-                    ],
-                )
+                # 启动浏览器（使用系统Chrome）
+                try:
+                    # 尝试使用系统Chrome
+                    context = await p.chromium.launch_persistent_context(
+                        user_data_dir=temp_dir,
+                        headless=True,
+                        executable_path="/usr/bin/google-chrome",
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                        viewport={"width": 1920, "height": 1080},
+                        args=[
+                            "--disable-blink-features=AutomationControlled",
+                            "--disable-dev-shm-usage",
+                            "--disable-web-security",
+                            "--no-sandbox",
+                            "--disable-gpu",
+                            "--disable-extensions",
+                            "--proxy-server='direct://'",  # 禁用代理
+                            "--disable-background-networking",  # 禁用后台网络
+                            "--disable-features=VizDisplayCompositor",
+                        ],
+                    )
+                except Exception as e:
+                    print(f"⚠️ 系统Chrome启动失败，尝试使用默认浏览器: {e}")
+                    # 回退到默认浏览器
+                    context = await p.chromium.launch_persistent_context(
+                        user_data_dir=temp_dir,
+                        headless=True,
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                        viewport={"width": 1920, "height": 1080},
+                        args=[
+                            "--disable-blink-features=AutomationControlled",
+                            "--disable-dev-shm-usage",
+                            "--disable-web-security",
+                            "--no-sandbox",
+                            "--proxy-server='direct://'",  # 禁用代理
+                            "--disable-background-networking",
+                        ],
+                    )
 
                 page = await context.new_page()
 
