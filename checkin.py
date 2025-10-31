@@ -85,44 +85,74 @@ class CheckIn:
 
         async with async_playwright() as p:
             with tempfile.TemporaryDirectory() as temp_dir:
-                # 启动浏览器（使用系统Chrome）
-                try:
-                    # 尝试使用系统Chrome
-                    context = await p.chromium.launch_persistent_context(
-                        user_data_dir=temp_dir,
-                        headless=True,
-                        executable_path="/usr/bin/google-chrome",
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                        viewport={"width": 1920, "height": 1080},
-                        args=[
-                            "--disable-blink-features=AutomationControlled",
-                            "--disable-dev-shm-usage",
-                            "--disable-web-security",
-                            "--no-sandbox",
-                            "--disable-gpu",
-                            "--disable-extensions",
-                            "--proxy-server='direct://'",  # 禁用代理
-                            "--disable-background-networking",  # 禁用后台网络
-                            "--disable-features=VizDisplayCompositor",
-                        ],
-                    )
-                except Exception as e:
-                    print(f"⚠️ 系统Chrome启动失败，尝试使用默认浏览器: {e}")
-                    # 回退到默认浏览器
-                    context = await p.chromium.launch_persistent_context(
-                        user_data_dir=temp_dir,
-                        headless=True,
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                        viewport={"width": 1920, "height": 1080},
-                        args=[
-                            "--disable-blink-features=AutomationControlled",
-                            "--disable-dev-shm-usage",
-                            "--disable-web-security",
-                            "--no-sandbox",
-                            "--proxy-server='direct://'",  # 禁用代理
-                            "--disable-background-networking",
-                        ],
-                    )
+                # 启动浏览器（智能选择启动方式）
+                context = None
+                browser_strategies = [
+                    # 策略1: 尝试使用系统Chrome（本地环境）
+                    {
+                        "name": "系统Chrome",
+                        "executable": "/usr/bin/google-chrome",
+                        "headless": True,
+                    },
+                    # 策略2: 尝试使用Playwright内置浏览器（CI环境）
+                    {
+                        "name": "Playwright内置浏览器",
+                        "executable": None,
+                        "headless": True,
+                    },
+                    # 策略3: 尝试使用chromium
+                    {
+                        "name": "chromium",
+                        "executable": "/usr/bin/chromium-browser",
+                        "headless": True,
+                    },
+                ]
+
+                for strategy in browser_strategies:
+                    try:
+                        print(f"🔄 尝试使用 {strategy['name']} 启动浏览器...")
+
+                        launch_config = {
+                            "user_data_dir": temp_dir,
+                            "headless": strategy["headless"],
+                            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                            "viewport": {"width": 1920, "height": 1080},
+                            "args": [
+                                "--disable-blink-features=AutomationControlled",
+                                "--disable-dev-shm-usage",
+                                "--disable-web-security",
+                                "--no-sandbox",
+                                "--disable-gpu",
+                                "--disable-extensions",
+                                "--no-proxy-server",  # 完全禁用代理
+                                "--disable-background-networking",
+                                "--disable-ntp-network-feature",
+                                "--disable-default-apps",
+                                "--disable-sync",
+                                "--disable-background-timer-throttling",
+                                "--disable-renderer-backgrounding",
+                                "--disable-backgrounding-occluded-windows",
+                                "--disable-component-extensions-with-background-pages",
+                                "--disable-background-extensions",
+                                "--disable-ipc-flooding-protection",
+                                "--disable-logging",  # 禁用日志以减少CI噪音
+                                "--silent",  # 静默模式
+                            ],
+                        }
+
+                        if strategy["executable"]:
+                            launch_config["executable_path"] = strategy["executable"]
+
+                        context = await p.chromium.launch_persistent_context(**launch_config)
+                        print(f"✅ {strategy['name']} 启动成功")
+                        break
+
+                    except Exception as e:
+                        print(f"⚠️ {strategy['name']} 启动失败: {str(e)[:100]}...")
+                        continue
+
+                if not context:
+                    raise Exception("所有浏览器启动策略都失败了")
 
                 page = await context.new_page()
 
