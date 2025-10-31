@@ -152,7 +152,8 @@ async def main():
 
                     # 展示用户信息（若可用）与余额信息
                     if user_info and user_info.get("success"):
-                        account_result += f"    💰 {user_info['display']}\n"
+                        display_info = user_info.get("display", "用户信息获取成功")
+                        account_result += f"    💰 {display_info}\n"
 
                         # 记录余额信息
                         current_quota = user_info.get("quota")
