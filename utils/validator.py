@@ -46,17 +46,13 @@ def _validate_auth_config(auth: AuthConfig, auth_index: int) -> List[str]:
     if auth.method == "cookies":
         if not auth.cookies:
             errors.append(f"{prefix}: Cookies 认证缺少 cookies 配置")
-        elif "session" not in auth.cookies:
-            errors.append(f"{prefix}: Cookies 认证缺少 session 字段")
-
-        if not auth.api_user:
-            errors.append(f"{prefix}: Cookies 认证缺少 api_user 配置")
+        # 注意：api_user 是可选的，可以从认证后的用户信息API自动获取
+        # 不再强制要求 session cookie，因为不同平台的cookie名称可能不同
 
     elif auth.method == "email":
         if not auth.username:
             errors.append(f"{prefix}: 邮箱认证缺少用户名")
-        elif "@" not in auth.username:
-            errors.append(f"{prefix}: 邮箱地址格式无效")
+        # 注意：不强制验证邮箱格式，因为某些平台可能使用用户名登录
 
         if not auth.password:
             errors.append(f"{prefix}: 邮箱认证缺少密码")

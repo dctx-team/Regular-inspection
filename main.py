@@ -58,11 +58,15 @@ def load_balance_hash() -> Optional[str]:
 
 def save_balance_hash(balance_hash: str) -> None:
     """保存余额hash"""
+    logger = logging.getLogger(__name__)
     try:
         with open(BALANCE_HASH_FILE, "w", encoding="utf-8") as f:
             f.write(balance_hash)
-    except Exception as e:
-        print(f"⚠️ Failed to save balance hash: {e}")
+        logger.debug(f"余额hash已保存: {balance_hash}")
+    except (IOError, OSError) as e:
+        error_msg = f"Failed to save balance hash: {e}"
+        print(f"⚠️ {error_msg}")
+        logger.error(error_msg, exc_info=True)
 
 
 def generate_balance_hash(balances: dict) -> str:
@@ -234,19 +238,16 @@ async def main():
 
         except (ConnectionError, TimeoutError) as e:
             error_msg = f"{account.name} 网络连接异常: {type(e).__name__}: {e}"
-            print(f"❌ {error_msg}")
             logger.error(error_msg, exc_info=True)
             need_notify = True
             notification_content.append(f"❌ {account.name} 网络异常: {str(e)[:80]}")
         except ValueError as e:
             error_msg = f"{account.name} 配置或数据异常: {type(e).__name__}: {e}"
-            print(f"❌ {error_msg}")
             logger.error(error_msg, exc_info=True)
             need_notify = True
             notification_content.append(f"❌ {account.name} 配置异常: {str(e)[:80]}")
         except Exception as e:
             error_msg = f"{account.name} 处理异常: {type(e).__name__}: {e}"
-            print(f"❌ {error_msg}")
             logger.error(error_msg, exc_info=True)
             need_notify = True
             notification_content.append(f"❌ {account.name} 异常: {str(e)[:80]}")
@@ -321,12 +322,10 @@ def run_main():
         asyncio.run(main())
     except KeyboardInterrupt:
         msg = "程序被用户中断"
-        print(f"\n⚠️ {msg}")
         logger.warning(msg)
         sys.exit(1)
     except Exception as e:
         msg = f"程序执行出错: {e}"
-        print(f"\n❌ {msg}")
         logger.error(msg, exc_info=True)
         sys.exit(1)
 
