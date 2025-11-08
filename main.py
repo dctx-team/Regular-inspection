@@ -8,10 +8,11 @@ Router平台自动签到脚本 - 重构版
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import sys
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from dotenv import load_dotenv
 
@@ -24,7 +25,27 @@ load_dotenv(override=True)
 BALANCE_HASH_FILE = "balance_hash.txt"
 
 
-def load_balance_hash() -> str | None:
+def setup_logging():
+    """配置日志系统"""
+    log_dir = "logs"
+    os.makedirs(log_dir, exist_ok=True)
+
+    log_file = os.path.join(log_dir, f"checkin_{datetime.now().strftime('%Y%m%d')}.log")
+
+    # 配置logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
+    return logging.getLogger(__name__)
+
+
+def load_balance_hash() -> Optional[str]:
     """加载余额hash"""
     try:
         if os.path.exists(BALANCE_HASH_FILE):
@@ -60,10 +81,16 @@ def generate_balance_hash(balances: dict) -> str:
 
 async def main():
     """主函数"""
+    logger = setup_logging()
+
     print("=" * 80)
     print("🚀 Router平台多账号自动签到脚本 (重构版)")
     print(f"🕒 执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 80)
+
+    logger.info("="* 80)
+    logger.info("程序启动")
+    logger.info(f"执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     # 加载应用配置
     app_config = AppConfig.load_from_env()
@@ -205,10 +232,22 @@ async def main():
 
             notification_content.append(account_result)
 
+        except (ConnectionError, TimeoutError) as e:
+            error_msg = f"{account.name} 网络连接异常: {type(e).__name__}: {e}"
+            print(f"❌ {error_msg}")
+            logger.error(error_msg, exc_info=True)
+            need_notify = True
+            notification_content.append(f"❌ {account.name} 网络异常: {str(e)[:80]}")
+        except ValueError as e:
+            error_msg = f"{account.name} 配置或数据异常: {type(e).__name__}: {e}"
+            print(f"❌ {error_msg}")
+            logger.error(error_msg, exc_info=True)
+            need_notify = True
+            notification_content.append(f"❌ {account.name} 配置异常: {str(e)[:80]}")
         except Exception as e:
-            print(f"❌ {account.name} 处理异常: {e}")
-            import traceback
-            traceback.print_exc()
+            error_msg = f"{account.name} 处理异常: {type(e).__name__}: {e}"
+            print(f"❌ {error_msg}")
+            logger.error(error_msg, exc_info=True)
             need_notify = True
             notification_content.append(f"❌ {account.name} 异常: {str(e)[:80]}")
 
@@ -257,11 +296,19 @@ async def main():
         notify.push_message("Router签到提醒", notify_content, msg_type="text")
         print("\n🔔 通知已发送")
     else:
-        print("\nℹ️ 所有账号成功且余额无变化，跳过通知")
+        # 区分无余额数据和余额无变化两种情况
+        if current_balance_hash:
+            print("\nℹ️ 所有账号成功且余额无变化，跳过通知")
+        else:
+            print("\nℹ️ 所有账号成功（未获取到余额数据），跳过通知")
 
     print("\n" + "=" * 80)
     print(f"✅ 程序执行完成 - 成功: {success_count}/{total_count}")
     print("=" * 80)
+
+    logger.info("=" * 80)
+    logger.info(f"程序执行完成 - 成功: {success_count}/{total_count}")
+    logger.info("=" * 80)
 
     # 设置退出码
     sys.exit(0 if success_count > 0 else 1)
@@ -269,15 +316,18 @@ async def main():
 
 def run_main():
     """运行主函数的包装函数"""
+    logger = logging.getLogger(__name__)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n⚠️ 程序被用户中断")
+        msg = "程序被用户中断"
+        print(f"\n⚠️ {msg}")
+        logger.warning(msg)
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ 程序执行出错: {e}")
-        import traceback
-        traceback.print_exc()
+        msg = f"程序执行出错: {e}"
+        print(f"\n❌ {msg}")
+        logger.error(msg, exc_info=True)
         sys.exit(1)
 
 
