@@ -6,6 +6,9 @@ import json
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+from utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 
 @dataclass
@@ -139,7 +142,7 @@ class AppConfig:
                         user_info_url=config["user_info_url"]
                     )
             except Exception as e:
-                print(f"⚠️ Failed to load custom providers: {e}")
+                logger.warning(f"⚠️ Failed to load custom providers: {e}")
 
         return cls(providers=default_providers)
 
@@ -162,7 +165,7 @@ def load_accounts() -> Optional[List[AccountConfig]]:
                     account_data["provider"] = "anyrouter"
                     all_accounts.append(AccountConfig.from_dict(account_data, len(all_accounts)))
         except Exception as e:
-            print(f"❌ Failed to load ANYROUTER_ACCOUNTS: {e}")
+            logger.error(f"❌ Failed to load ANYROUTER_ACCOUNTS: {e}")
 
     # 加载 AgentRouter 账号
     agentrouter_str = os.getenv("AGENTROUTER_ACCOUNTS")
@@ -174,7 +177,7 @@ def load_accounts() -> Optional[List[AccountConfig]]:
                     account_data["provider"] = "agentrouter"
                     all_accounts.append(AccountConfig.from_dict(account_data, len(all_accounts)))
         except Exception as e:
-            print(f"❌ Failed to load AGENTROUTER_ACCOUNTS: {e}")
+            logger.error(f"❌ Failed to load AGENTROUTER_ACCOUNTS: {e}")
 
     # 加载统一的 ACCOUNTS 配置（支持多 Provider）
     accounts_str = os.getenv("ACCOUNTS")
@@ -185,7 +188,7 @@ def load_accounts() -> Optional[List[AccountConfig]]:
                 for i, account_data in enumerate(accounts_data):
                     all_accounts.append(AccountConfig.from_dict(account_data, len(all_accounts)))
         except Exception as e:
-            print(f"❌ Failed to load ACCOUNTS: {e}")
+            logger.error(f"❌ Failed to load ACCOUNTS: {e}")
 
     return all_accounts if all_accounts else None
 
@@ -193,17 +196,20 @@ def load_accounts() -> Optional[List[AccountConfig]]:
 def validate_account(account: AccountConfig, index: int) -> bool:
     """验证账号配置"""
     if not account.auth_configs:
-        print(f"❌ Account {index + 1} ({account.name}): No authentication method configured")
+        logger.error(f"❌ Account {index + 1} ({account.name}): No authentication method configured")
         return False
 
     for auth in account.auth_configs:
         if auth.method == "cookies":
-            if not auth.cookies or not auth.api_user:
-                print(f"❌ Account {index + 1} ({account.name}): Cookies auth requires cookies and api_user")
+            if not auth.cookies:
+                logger.error(f"❌ Account {index + 1} ({account.name}): Cookies auth requires cookies")
                 return False
+            # api_user 现在是可选的，可以从认证后的用户信息API自动获取
+            if not auth.api_user:
+                logger.info(f"ℹ️  Account {index + 1} ({account.name}): api_user 未配置，将从认证后自动获取")
         elif auth.method in ["email", "github", "linux.do"]:
             if not auth.username or not auth.password:
-                print(f"❌ Account {index + 1} ({account.name}): {auth.method} auth requires username and password")
+                logger.error(f"❌ Account {index + 1} ({account.name}): {auth.method} auth requires username and password")
                 return False
 
     return True

@@ -30,14 +30,29 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      - name: 缓存 Playwright 浏览器
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: 安装 Playwright 浏览器
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: |
           playwright install chromium
+          playwright install-deps chromium
+
+      - name: 仅安装系统依赖（如果有缓存）
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: |
           playwright install-deps chromium
 
       - name: 执行签到

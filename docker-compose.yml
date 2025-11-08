@@ -2,12 +2,28 @@ version: '3.8'
 
 services:
   router-checkin:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: router-checkin:latest
     container_name: router-checkin
     restart: unless-stopped
     env_file:
       - .env
     volumes:
       - ./balance_hash.txt:/app/balance_hash.txt
+      - ./balance_data.json:/app/balance_data.json
     environment:
       - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+    networks:
+      - router-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  router-net:
+    driver: bridge

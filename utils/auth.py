@@ -9,11 +9,21 @@ from typing import Optional, Dict, Any, Tuple
 from playwright.async_api import Page, BrowserContext
 import re
 from utils.config import AuthConfig, ProviderConfig
+from utils.logger import setup_logger
+from utils.sanitizer import sanitize_exception
+from utils.constants import (
+    DEFAULT_USER_AGENT,
+    KEY_COOKIE_NAMES,
+    EMAIL_INPUT_SELECTORS,
+    PASSWORD_INPUT_SELECTORS,
+    LOGIN_BUTTON_SELECTORS,
+    POPUP_CLOSE_SELECTORS,
+    GITHUB_BUTTON_SELECTORS,
+    LINUXDO_BUTTON_SELECTORS,
+)
 
-
-# 常量定义
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-KEY_COOKIE_NAMES = ["session", "sessionid", "token", "auth", "jwt", "user_id", "csrf_token"]
+# 模块级logger
+logger = setup_logger(__name__)
 
 
 class Authenticator(ABC):
@@ -54,13 +64,7 @@ class Authenticator(ABC):
                 "Accept": "application/json"
             }
 
-            # SSL验证 - 默认启用以确保安全
-            verify_opt = True
-            if os.getenv("DISABLE_TLS_VERIFY") == "true":
-                verify_opt = False
-                print(f"⚠️  警告: SSL验证已禁用，存在安全风险！")
-
-            async with httpx.AsyncClient(cookies=cookies, timeout=10.0, verify=verify_opt) as client:
+            async with httpx.AsyncClient(cookies=cookies, timeout=10.0, verify=True) as client:
                 response = await client.get(self.provider_config.get_user_info_url(), headers=headers)
                 if response.status_code == 200:
                     data = response.json()
@@ -69,10 +73,10 @@ class Authenticator(ABC):
                         user_id = user_data.get("id") or user_data.get("user_id") or user_data.get("userId")
                         username = user_data.get("username") or user_data.get("name") or user_data.get("email")
                         if user_id or username:
-                            print(f"✅ 提取到用户标识: ID={user_id}, 用户名={username}")
+                            logger.info(f"✅ 提取到用户标识: ID={user_id}, 用户名={username}")
                             return str(user_id) if user_id else None, username
         except Exception as e:
-            print(f"⚠️ 提取用户信息失败: {e}")
+            logger.warning(f"⚠️ 提取用户信息失败: {e}")
         
         return None, None
 
@@ -124,7 +128,7 @@ class CookiesAuthenticator(Authenticator):
             }
 
         except Exception as e:
-            return {"success": False, "error": f"Cookies auth failed: {str(e)}"}
+            return {"success": False, "error": f"Cookies auth failed: {sanitize_exception(e)}"}
 
 
 class EmailAuthenticator(Authenticator):
@@ -135,14 +139,7 @@ class EmailAuthenticator(Authenticator):
         try:
             await page.keyboard.press('Escape')
             await page.wait_for_timeout(300)
-            close_selectors = [
-                '.semi-modal .semi-modal-close',
-                '[aria-label="Close"]',
-                'button:has-text("关闭")',
-                'button:has-text("我知道了")',
-                'button:has-text("取消")',
-            ]
-            for sel in close_selectors:
+            for sel in POPUP_CLOSE_SELECTORS:
                 try:
                     close_btn = await page.query_selector(sel)
                     if close_btn:
@@ -156,7 +153,7 @@ class EmailAuthenticator(Authenticator):
 
     async def _find_and_click_email_tab(self, page: Page) -> bool:
         """查找并点击邮箱登录选项"""
-        print(f"🔍 [{self.auth_config.username}] 查找邮箱登录选项...")
+        logger.info(f"🔍 [{self.auth_config.username}] 查找邮箱登录选项...")
         for sel in [
             'button:has-text("邮箱")',
             'a:has-text("邮箱")',
@@ -168,7 +165,7 @@ class EmailAuthenticator(Authenticator):
             try:
                 el = await page.query_selector(sel)
                 if el:
-                    print(f"✅ [{self.auth_config.username}] 找到邮箱登录选项: {sel}")
+                    logger.info(f"✅ [{self.auth_config.username}] 找到邮箱登录选项: {sel}")
                     await el.click()
                     await page.wait_for_timeout(800)
                     return True
@@ -178,24 +175,13 @@ class EmailAuthenticator(Authenticator):
 
     async def _find_email_input(self, page: Page):
         """查找邮箱输入框"""
-        print(f"🔍 [{self.auth_config.username}] 查找邮箱输入框...")
-        email_selectors = [
-            'input[type="email"]',
-            'input[name="email"]',
-            'input[name="username"]',
-            'input[name="account"]',
-            'input[id*="email" i]',
-            'input[placeholder*="邮箱" i]',
-            'input[placeholder*="Email" i]',
-            'input[placeholder*="用户名" i]',
-            'input[autocomplete="username"]',
-        ]
+        logger.info(f"🔍 [{self.auth_config.username}] 查找邮箱输入框...")
         email_input = None
-        for sel in email_selectors:
+        for sel in EMAIL_INPUT_SELECTORS:
             try:
                 email_input = await page.query_selector(sel)
                 if email_input:
-                    print(f"✅ [{self.auth_config.username}] 找到邮箱输入框: {sel}")
+                    logger.info(f"✅ [{self.auth_config.username}] 找到邮箱输入框: {sel}")
                     return email_input
             except:
                 continue
@@ -210,35 +196,27 @@ class EmailAuthenticator(Authenticator):
         try:
             page_title = await page.title()
             page_url = page.url
-            print(f"❌ [{self.auth_config.username}] 邮箱输入框未找到")
-            print(f"   当前页面: {page_title}")
-            print(f"   当前URL: {page_url}")
+            logger.error(f"❌ [{self.auth_config.username}] 邮箱输入框未找到")
+            logger.info(f"   当前页面: {page_title}")
+            logger.info(f"   当前URL: {page_url}")
 
             # 查找所有输入框
             all_inputs = await page.query_selector_all('input')
-            print(f"   页面共有 {len(all_inputs)} 个输入框")
+            logger.info(f"   页面共有 {len(all_inputs)} 个输入框")
             for i, inp in enumerate(all_inputs[:5]):  # 只显示前5个
                 try:
                     inp_type = await inp.get_attribute('type')
                     inp_name = await inp.get_attribute('name')
                     inp_placeholder = await inp.get_attribute('placeholder')
-                    print(f"     输入框{i+1}: type={inp_type}, name={inp_name}, placeholder={inp_placeholder}")
+                    logger.info(f"     输入框{i+1}: type={inp_type}, name={inp_name}, placeholder={inp_placeholder}")
                 except:
-                    print(f"     输入框{i+1}: 无法获取属性")
+                    logger.info(f"     输入框{i+1}: 无法获取属性")
         except Exception as e:
-            print(f"   调试信息获取失败: {e}")
+            logger.info(f"   调试信息获取失败: {e}")
 
     async def _find_and_click_login_button(self, page: Page):
         """查找并点击登录按钮"""
-        login_selectors = [
-            'button[type="submit"]',
-            'button:has-text("登录")',
-            'button:has-text("Login")',
-            'button:has-text("Sign in")',
-            'button:has-text("Sign In")',
-            'button.semi-button:has-text("登录")',
-        ]
-        for sel in login_selectors:
+        for sel in LOGIN_BUTTON_SELECTORS:
             try:
                 login_button = await page.query_selector(sel)
                 if login_button:
@@ -250,21 +228,21 @@ class EmailAuthenticator(Authenticator):
     async def _check_login_success(self, page: Page) -> Tuple[bool, Optional[str]]:
         """检查登录是否成功"""
         current_url = page.url
-        print(f"🔍 [{self.auth_config.username}] 登录后URL: {current_url}")
+        logger.info(f"🔍 [{self.auth_config.username}] 登录后URL: {current_url}")
 
         # 方法1: 检查URL变化
         if "login" not in current_url.lower():
-            print(f"✅ [{self.auth_config.username}] URL已变化，登录可能成功")
+            logger.info(f"✅ [{self.auth_config.username}] URL已变化，登录可能成功")
             return True, None
 
-        print(f"⚠️ [{self.auth_config.username}] 仍在登录页面，检查其他登录指标...")
+        logger.warning(f"⚠️ [{self.auth_config.username}] 仍在登录页面，检查其他登录指标...")
 
         # 方法2: 检查页面标题
         try:
             page_title = await page.title()
-            print(f"🔍 [{self.auth_config.username}] 页面标题: {page_title}")
+            logger.info(f"🔍 [{self.auth_config.username}] 页面标题: {page_title}")
             if "login" not in page_title.lower() and "console" in page_title.lower():
-                print(f"✅ [{self.auth_config.username}] 页面标题显示已登录")
+                logger.info(f"✅ [{self.auth_config.username}] 页面标题显示已登录")
                 return True, None
         except:
             pass
@@ -275,7 +253,7 @@ class EmailAuthenticator(Authenticator):
                 '[class*="user"], [class*="avatar"], [class*="profile"], button:has-text("退出"), button:has-text("Logout")'
             )
             if user_elements:
-                print(f"✅ [{self.auth_config.username}] 找到用户界面元素，登录成功")
+                logger.info(f"✅ [{self.auth_config.username}] 找到用户界面元素，登录成功")
                 return True, None
         except:
             pass
@@ -310,12 +288,12 @@ class EmailAuthenticator(Authenticator):
                             is_real_error = any(keyword in error_text_lower for keyword in error_keywords)
 
                             if is_real_error:
-                                print(f"❌ [{self.auth_config.username}] 登录错误: {error_text}")
+                                logger.error(f"❌ [{self.auth_config.username}] 登录错误: {error_text}")
                                 return f"Login failed: {error_text}"
                             elif is_success:
-                                print(f"✅ [{self.auth_config.username}] 检测到成功消息: {error_text}")
+                                logger.info(f"✅ [{self.auth_config.username}] 检测到成功消息: {error_text}")
                             else:
-                                print(f"⚠️ [{self.auth_config.username}] 检测到消息: {error_text}")
+                                logger.warning(f"⚠️ [{self.auth_config.username}] 检测到消息: {error_text}")
                     except:
                         pass
         except:
@@ -325,8 +303,8 @@ class EmailAuthenticator(Authenticator):
     async def authenticate(self, page: Page, context: BrowserContext) -> Dict[str, Any]:
         """使用邮箱密码登录"""
         try:
-            print(f"ℹ️ Starting Email authentication")
-            print(f"🔍 [{self.auth_config.username}] 访问登录页: {self.provider_config.get_login_url()}")
+            logger.info(f"ℹ️ Starting Email authentication")
+            logger.info(f"🔍 [{self.auth_config.username}] 访问登录页: {self.provider_config.get_login_url()}")
 
             # 访问登录页
             await page.goto(self.provider_config.get_login_url())
@@ -353,14 +331,19 @@ class EmailAuthenticator(Authenticator):
 
             # 填写邮箱和密码
             await email_input.fill(self.auth_config.username)
-            await password_input.fill(self.auth_config.password)
+            # 填写密码时添加异常保护
+            try:
+                await password_input.fill(self.auth_config.password)
+            except Exception as e:
+                # 密码填写失败时，避免在日志中暴露密码
+                return {"success": False, "error": f"Password input failed: {sanitize_exception(e)}"}
 
             # 查找并点击登录按钮
             login_button = await self._find_and_click_login_button(page)
             if not login_button:
                 return {"success": False, "error": "Login button not found"}
 
-            print(f"🔑 [{self.auth_config.username}] 点击登录按钮...")
+            logger.info(f"🔑 [{self.auth_config.username}] 点击登录按钮...")
             await login_button.click()
 
             # 等待页面跳转或响应
@@ -368,7 +351,7 @@ class EmailAuthenticator(Authenticator):
                 await page.wait_for_load_state("networkidle", timeout=10000)
                 await page.wait_for_timeout(2000)
             except Exception:
-                print(f"⚠️ [{self.auth_config.username}] 页面加载超时，继续检查登录状态...")
+                logger.warning(f"⚠️ [{self.auth_config.username}] 页面加载超时，继续检查登录状态...")
 
             # 检查登录是否成功
             success, error_msg = await self._check_login_success(page)
@@ -376,15 +359,15 @@ class EmailAuthenticator(Authenticator):
                 return {"success": False, "error": error_msg}
 
             # 获取 cookies
-            print(f"🍪 [{self.auth_config.username}] 获取登录cookies...")
+            logger.info(f"🍪 [{self.auth_config.username}] 获取登录cookies...")
             final_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
 
             # 检查是否有session cookie
             if "session" not in cookies_dict and "sessionid" not in cookies_dict:
-                print(f"⚠️ [{self.auth_config.username}] 未找到session cookie，但继续尝试...")
+                logger.warning(f"⚠️ [{self.auth_config.username}] 未找到session cookie，但继续尝试...")
 
-            print(f"✅ [{self.auth_config.username}] 邮箱认证完成，获取到 {len(cookies_dict)} 个cookies")
+            logger.info(f"✅ [{self.auth_config.username}] 邮箱认证完成，获取到 {len(cookies_dict)} 个cookies")
 
             # 尝试从用户信息API获取真实的用户标识
             user_id, username = await self._extract_user_info(page, cookies_dict)
@@ -397,7 +380,7 @@ class EmailAuthenticator(Authenticator):
             }
 
         except Exception as e:
-            return {"success": False, "error": f"Email auth failed: {str(e)}"}
+            return {"success": False, "error": f"Email auth failed: {sanitize_exception(e)}"}
 
 
 class GitHubAuthenticator(Authenticator):
@@ -406,7 +389,7 @@ class GitHubAuthenticator(Authenticator):
     async def authenticate(self, page: Page, context: BrowserContext) -> Dict[str, Any]:
         """使用 GitHub 登录"""
         try:
-            print(f"ℹ️ Starting GitHub authentication")
+            logger.info(f"ℹ️ Starting GitHub authentication")
 
             # 访问登录页
             await page.goto(self.provider_config.get_login_url())
@@ -414,12 +397,7 @@ class GitHubAuthenticator(Authenticator):
 
             # 查找并点击 GitHub 登录按钮（扩展匹配）
             github_button = None
-            for sel in [
-                'button:has-text("GitHub")',
-                'a:has-text("GitHub")',
-                'text=使用 GitHub',
-                'a[href*="github.com"]',
-            ]:
+            for sel in GITHUB_BUTTON_SELECTORS:
                 try:
                     github_button = await page.query_selector(sel)
                     if github_button:
@@ -441,7 +419,11 @@ class GitHubAuthenticator(Authenticator):
 
                 if username_input and password_input:
                     await username_input.fill(self.auth_config.username)
-                    await password_input.fill(self.auth_config.password)
+                    # 密码填写添加异常保护
+                    try:
+                        await password_input.fill(self.auth_config.password)
+                    except Exception as e:
+                        return {"success": False, "error": f"Password input failed: {sanitize_exception(e)}"}
 
                     # 提交登录
                     submit_button = await page.query_selector('input[type="submit"]')
@@ -451,7 +433,7 @@ class GitHubAuthenticator(Authenticator):
 
                 # 处理 2FA（如果需要）
                 if "two-factor" in page.url or "2fa" in page.url.lower():
-                    print("🔐 GitHub 2FA required - attempting to handle")
+                    logger.info("🔐 GitHub 2FA required - attempting to handle")
                     if not await self._handle_2fa(page):
                         return {"success": False, "error": "2FA authentication failed"}
 
@@ -470,22 +452,22 @@ class GitHubAuthenticator(Authenticator):
             final_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
 
-            print(f"🍪 [{self.auth_config.username}] GitHub OAuth认证完成，获取到 {len(cookies_dict)} 个cookies")
+            logger.info(f"🍪 [{self.auth_config.username}] GitHub OAuth认证完成，获取到 {len(cookies_dict)} 个cookies")
 
             # 检查关键认证cookies
             found_key_cookies = []
             for cookie_name in KEY_COOKIE_NAMES:
                 if cookie_name in cookies_dict:
                     found_key_cookies.append(cookie_name)
-                    print(f"   ✅ 找到关键cookie: {cookie_name}")
+                    logger.info(f"   ✅ 找到关键cookie: {cookie_name}")
 
             if not found_key_cookies:
-                print(f"   ⚠️ 未找到标准认证cookie，列出所有cookies:")
+                logger.warning(f"   ⚠️ 未找到标准认证cookie，列出所有cookies:")
                 for i, name in enumerate(list(cookies_dict.keys())):
                     if i < 5:  # 只显示前5个
-                        print(f"      {name}: ***")
+                        logger.info(f"      {name}: ***")
                     else:
-                        print(f"      ... 还有 {len(cookies_dict) - 5} 个cookies")
+                        logger.info(f"      ... 还有 {len(cookies_dict) - 5} 个cookies")
                         break
 
             # 优先保存重要的认证cookies
@@ -494,12 +476,12 @@ class GitHubAuthenticator(Authenticator):
                 cookie_name = cookie["name"]
                 if any(key in cookie_name.lower() for key in ["session", "token", "auth", "user"]):
                     important_cookies[cookie_name] = cookie["value"]
-                    print(f"   📋 保存重要cookie: {cookie_name} (domain: {cookie.get('domain', 'N/A')})")
+                    logger.info(f"   📋 保存重要cookie: {cookie_name} (domain: {cookie.get('domain', 'N/A')})")
 
             # 如果没有找到重要cookies，返回所有cookies供API调用尝试
             if not important_cookies:
                 important_cookies = cookies_dict
-                print(f"   🔄 返回所有cookies供API调用尝试")
+                logger.info(f"   🔄 返回所有cookies供API调用尝试")
 
             # 尝试从用户信息API获取真实的用户标识
             user_id, username = await self._extract_user_info(page, important_cookies)
@@ -512,12 +494,12 @@ class GitHubAuthenticator(Authenticator):
             }
 
         except Exception as e:
-            return {"success": False, "error": f"GitHub auth failed: {str(e)}"}
+            return {"success": False, "error": f"GitHub auth failed: {sanitize_exception(e)}"}
 
     async def _handle_2fa(self, page: Page) -> bool:
         """处理 GitHub 2FA 认证"""
         try:
-            print("🔐 处理 GitHub 2FA 认证...")
+            logger.info("🔐 处理 GitHub 2FA 认证...")
 
             # 等待 2FA 输入框出现
             await page.wait_for_selector('input[name="otp"]', timeout=10000)
@@ -525,7 +507,7 @@ class GitHubAuthenticator(Authenticator):
             # 方法1: 从环境变量获取预先生成的 2FA 代码
             otp_code = os.getenv('GITHUB_2FA_CODE')
             if otp_code:
-                print("📱 使用环境变量中的 2FA 代码")
+                logger.info("📱 使用环境变量中的 2FA 代码")
                 await page.fill('input[name="otp"]', otp_code)
                 await page.click('button[type="submit"]', timeout=5000)
                 await page.wait_for_load_state("networkidle", timeout=10000)
@@ -534,46 +516,46 @@ class GitHubAuthenticator(Authenticator):
             # 方法2: 使用 TOTP 密钥生成代码
             totp_secret = os.getenv('GITHUB_TOTP_SECRET')
             if totp_secret:
-                print("🔑 使用 TOTP 密钥生成 2FA 代码")
+                logger.info("🔑 使用 TOTP 密钥生成 2FA 代码")
                 try:
                     import pyotp
                     totp = pyotp.TOTP(totp_secret)
                     otp_code = totp.now()
-                    print(f"🔢 生成的 2FA 代码: {otp_code}")
+                    logger.info(f"🔢 生成的 2FA 代码: {otp_code}")
                     await page.fill('input[name="otp"]', otp_code)
                     await page.click('button[type="submit"]', timeout=5000)
                     await page.wait_for_load_state("networkidle", timeout=10000)
                     return True
                 except ImportError:
-                    print("❌ 需要安装 pyotp 库: pip install pyotp")
+                    logger.error("❌ 需要安装 pyotp 库: pip install pyotp")
                 except Exception as e:
-                    print(f"❌ TOTP 生成失败: {e}")
+                    logger.error(f"❌ TOTP 生成失败: {e}")
 
             # 方法3: 尝试常见的备用恢复代码
             recovery_codes_str = os.getenv('GITHUB_RECOVERY_CODES')
             if recovery_codes_str:
                 recovery_codes = recovery_codes_str.split(',')
-                print(f"🔄 尝试使用恢复代码 (剩余 {len(recovery_codes)} 个)")
+                logger.info(f"🔄 尝试使用恢复代码 (剩余 {len(recovery_codes)} 个)")
                 for i, code in enumerate(recovery_codes):
                     try:
                         await page.fill('input[name="otp"]', code.strip())
                         await page.click('button[type="submit"]', timeout=5000)
                         await page.wait_for_load_state("networkidle", timeout=10000)
-                        print(f"✅ 恢复代码 {i+1} 验证成功")
+                        logger.info(f"✅ 恢复代码 {i+1} 验证成功")
                         return True
                     except:
-                        print(f"❌ 恢复代码 {i+1} 验证失败，尝试下一个...")
+                        logger.error(f"❌ 恢复代码 {i+1} 验证失败，尝试下一个...")
                         await page.wait_for_timeout(1000)
                         continue
 
-            print("❌ 无法自动处理 2FA，请手动处理或配置以下环境变量:")
-            print("   - GITHUB_2FA_CODE: 预先生成的 2FA 代码")
-            print("   - GITHUB_TOTP_SECRET: TOTP 密钥")
-            print("   - GITHUB_RECOVERY_CODES: 恢复代码列表 (逗号分隔)")
+            logger.error("❌ 无法自动处理 2FA，请手动处理或配置以下环境变量:")
+            logger.info("   - GITHUB_2FA_CODE: 预先生成的 2FA 代码")
+            logger.info("   - GITHUB_TOTP_SECRET: TOTP 密钥")
+            logger.info("   - GITHUB_RECOVERY_CODES: 恢复代码列表 (逗号分隔)")
             return False
 
         except Exception as e:
-            print(f"❌ 2FA 处理异常: {e}")
+            logger.error(f"❌ 2FA 处理异常: {e}")
             return False
 
 
@@ -583,7 +565,7 @@ class LinuxDoAuthenticator(Authenticator):
     async def authenticate(self, page: Page, context: BrowserContext) -> Dict[str, Any]:
         """使用 Linux.do 登录"""
         try:
-            print(f"ℹ️ Starting Linux.do authentication")
+            logger.info(f"ℹ️ Starting Linux.do authentication")
 
             # 访问登录页
             await page.goto(self.provider_config.get_login_url())
@@ -601,54 +583,19 @@ class LinuxDoAuthenticator(Authenticator):
                 pass
 
             # 查找并点击 LinuxDO 登录按钮（增强匹配）
-            print(f"🔍 [{self.auth_config.username}] 查找LinuxDO登录按钮...")
+            logger.info(f"🔍 [{self.auth_config.username}] 查找LinuxDO登录按钮...")
             linux_button = None
             found_selector = None
-
-            # 扩展的登录按钮选择器
-            selectors = [
-                # 精确匹配
-                'button:has-text("LinuxDO")',
-                'a:has-text("LinuxDO")',
-                'button:has-text("Linux.do")',
-                'button:has-text("LinuxDO 登录")',
-                'a:has-text("使用 LinuxDO")',
-                'text=使用 LinuxDO',
-                'button:has-text("LinuxDO 账号登录")',
-
-                # 模糊匹配
-                'button:has-text("Linux")',
-                'a:has-text("Linux")',
-                'button:has-text("DO")',
-                'a:has-text("DO")',
-
-                # 链接匹配
-                'a[href*="linux.do"]',
-                'a[href*="linuxdo"]',
-                'button[onclick*="linux"]',
-
-                # 图标或类名匹配
-                '[class*="linux"]',
-                '[class*="linuxdo"]',
-                '[data-provider*="linux"]',
-
-                # 第三方OAuth通用匹配
-                'button:has-text("第三方登录")',
-                'button:has-text("其他登录方式")',
-                'button:has-text("更多登录")',
-                '.oauth-login button',
-                '.third-party-login button',
-            ]
 
             # 先等待页面完全加载
             await page.wait_for_timeout(2000)
 
-            for sel in selectors:
+            for sel in LINUXDO_BUTTON_SELECTORS:
                 try:
                     linux_button = await page.query_selector(sel)
                     if linux_button:
                         found_selector = sel
-                        print(f"✅ [{self.auth_config.username}] 找到LinuxDO登录选项: {sel}")
+                        logger.info(f"✅ [{self.auth_config.username}] 找到LinuxDO登录选项: {sel}")
                         break
                 except:
                     continue
@@ -658,13 +605,13 @@ class LinuxDoAuthenticator(Authenticator):
                 try:
                     page_title = await page.title()
                     page_url = page.url
-                    print(f"❌ [{self.auth_config.username}] LinuxDO登录按钮未找到")
-                    print(f"   当前页面: {page_title}")
-                    print(f"   当前URL: {page_url}")
+                    logger.error(f"❌ [{self.auth_config.username}] LinuxDO登录按钮未找到")
+                    logger.info(f"   当前页面: {page_title}")
+                    logger.info(f"   当前URL: {page_url}")
 
                     # 查找所有按钮和链接
                     all_buttons = await page.query_selector_all('button, a[href]')
-                    print(f"   页面共有 {len(all_buttons)} 个按钮/链接")
+                    logger.info(f"   页面共有 {len(all_buttons)} 个按钮/链接")
 
                     # 显示前几个按钮的文本
                     for i, btn in enumerate(all_buttons[:8]):
@@ -672,34 +619,34 @@ class LinuxDoAuthenticator(Authenticator):
                             btn_text = await btn.inner_text()
                             btn_tag = await btn.evaluate('el => el.tagName.toLowerCase()')
                             if btn_text and btn_text.strip():
-                                print(f"     {btn_tag}: {btn_text.strip()[:50]}")
+                                logger.info(f"     {btn_tag}: {btn_text.strip()[:50]}")
                         except:
-                            print(f"     按钮{i+1}: 无法获取文本")
+                            logger.info(f"     按钮{i+1}: 无法获取文本")
 
                     # 如果仍然没找到，尝试点击可能的登录区域
                     login_containers = await page.query_selector_all('.login, .auth, .oauth, .third-party')
                     if login_containers:
-                        print(f"   找到 {len(login_containers)} 个可能的登录容器")
+                        logger.info(f"   找到 {len(login_containers)} 个可能的登录容器")
                         for i, container in enumerate(login_containers[:2]):
                             try:
                                 # 尝试点击容器内的第一个按钮
                                 first_btn = await container.query_selector('button, a')
                                 if first_btn:
                                     btn_text = await first_btn.inner_text()
-                                    print(f"   尝试点击容器内按钮: {btn_text.strip()[:30]}")
+                                    logger.info(f"   尝试点击容器内按钮: {btn_text.strip()[:30]}")
                                     await first_btn.click()
                                     await page.wait_for_timeout(2000)
 
                                     # 检查是否跳转到Linux.do
                                     if "linux.do" in page.url:
-                                        print(f"✅ [{self.auth_config.username}] 通过容器按钮成功跳转到Linux.do")
+                                        logger.info(f"✅ [{self.auth_config.username}] 通过容器按钮成功跳转到Linux.do")
                                         linux_button = first_btn
                                         found_selector = f"container button ({btn_text.strip()[:20]})"
                                         break
                             except:
                                 continue
                 except Exception as e:
-                    print(f"   调试信息获取失败: {e}")
+                    logger.info(f"   调试信息获取失败: {e}")
 
             if not linux_button:
                 return {"success": False, "error": "LinuxDO login button not found"}
@@ -715,7 +662,11 @@ class LinuxDoAuthenticator(Authenticator):
 
                 if username_input and password_input:
                     await username_input.fill(self.auth_config.username)
-                    await password_input.fill(self.auth_config.password)
+                    # 密码填写添加异常保护
+                    try:
+                        await password_input.fill(self.auth_config.password)
+                    except Exception as e:
+                        return {"success": False, "error": f"Password input failed: {sanitize_exception(e)}"}
 
                     # 点击登录按钮
                     login_button = await page.query_selector('button[id="login-button"]')
@@ -732,22 +683,22 @@ class LinuxDoAuthenticator(Authenticator):
             final_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
 
-            print(f"🍪 [{self.auth_config.username}] LinuxDO OAuth认证完成，获取到 {len(cookies_dict)} 个cookies")
+            logger.info(f"🍪 [{self.auth_config.username}] LinuxDO OAuth认证完成，获取到 {len(cookies_dict)} 个cookies")
 
             # 检查关键认证cookies
             found_key_cookies = []
             for cookie_name in KEY_COOKIE_NAMES:
                 if cookie_name in cookies_dict:
                     found_key_cookies.append(cookie_name)
-                    print(f"   ✅ 找到关键cookie: {cookie_name}")
+                    logger.info(f"   ✅ 找到关键cookie: {cookie_name}")
 
             if not found_key_cookies:
-                print(f"   ⚠️ 未找到标准认证cookie，列出所有cookies:")
+                logger.warning(f"   ⚠️ 未找到标准认证cookie，列出所有cookies:")
                 for i, name in enumerate(list(cookies_dict.keys())):
                     if i < 5:  # 只显示前5个
-                        print(f"      {name}: ***")
+                        logger.info(f"      {name}: ***")
                     else:
-                        print(f"      ... 还有 {len(cookies_dict) - 5} 个cookies")
+                        logger.info(f"      ... 还有 {len(cookies_dict) - 5} 个cookies")
                         break
 
             # 优先保存重要的认证cookies
@@ -756,12 +707,12 @@ class LinuxDoAuthenticator(Authenticator):
                 cookie_name = cookie["name"]
                 if any(key in cookie_name.lower() for key in ["session", "token", "auth", "user"]):
                     important_cookies[cookie_name] = cookie["value"]
-                    print(f"   📋 保存重要cookie: {cookie_name} (domain: {cookie.get('domain', 'N/A')})")
+                    logger.info(f"   📋 保存重要cookie: {cookie_name} (domain: {cookie.get('domain', 'N/A')})")
 
             # 如果没有找到重要cookies，返回所有cookies供API调用尝试
             if not important_cookies:
                 important_cookies = cookies_dict
-                print(f"   🔄 返回所有cookies供API调用尝试")
+                logger.info(f"   🔄 返回所有cookies供API调用尝试")
 
             # 尝试从用户信息API获取真实的用户标识
             user_id, username = await self._extract_user_info(page, important_cookies)
@@ -774,7 +725,7 @@ class LinuxDoAuthenticator(Authenticator):
             }
 
         except Exception as e:
-            return {"success": False, "error": f"Linux.do auth failed: {str(e)}"}
+            return {"success": False, "error": f"Linux.do auth failed: {sanitize_exception(e)}"}
 
 
 def get_authenticator(auth_config: AuthConfig, provider_config: ProviderConfig) -> Authenticator:
