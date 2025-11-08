@@ -70,11 +70,11 @@ class NotificationKit:
 
                 if domain in email_providers:
                     smtp_host, smtp_port, use_ssl = email_providers[domain]
-                    print(f'[DEBUG] 检测到邮箱服务商: {domain} -> {smtp_host}:{smtp_port}')
+                    logger.debug(f'检测到邮箱服务商: {domain} -> {smtp_host}:{smtp_port}')
                 else:
                     # 默认使用标准格式
                     smtp_host = f'smtp.{domain}'
-                    print(f'[DEBUG] 使用默认 SMTP 服务器: {smtp_host}')
+                    logger.debug(f'使用默认 SMTP 服务器: {smtp_host}')
 
             # 尝试连接并发送
             if use_ssl:
@@ -83,22 +83,22 @@ class NotificationKit:
                     with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as server:
                         server.login(self.email_user, self.email_pass)
                         server.send_message(msg)
-                        print(f'[DEBUG] 邮件发送成功 via SSL:{smtp_port}')
+                        logger.debug(f'邮件发送成功 via SSL:{smtp_port}')
                 except Exception as ssl_error:
                     # SSL 失败，尝试 STARTTLS (587)
-                    print(f'[DEBUG] SSL ({smtp_port}) 连接失败，尝试 STARTTLS (587): {ssl_error}')
+                    logger.debug(f'SSL ({smtp_port}) 连接失败，尝试 STARTTLS (587): {ssl_error}')
                     with smtplib.SMTP(smtp_host, 587, timeout=30) as server:
                         server.starttls()
                         server.login(self.email_user, self.email_pass)
                         server.send_message(msg)
-                        print(f'[DEBUG] 邮件发送成功 via STARTTLS:587')
+                        logger.debug(f'邮件发送成功 via STARTTLS:587')
             else:
                 # 使用 STARTTLS
                 with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
                     server.starttls()
                     server.login(self.email_user, self.email_pass)
                     server.send_message(msg)
-                    print(f'[DEBUG] 邮件发送成功 via STARTTLS:{smtp_port}')
+                    logger.debug(f'邮件发送成功 via STARTTLS:{smtp_port}')
 
         except Exception as e:
             # 提供更详细的错误信息
@@ -176,12 +176,12 @@ class NotificationKit:
         for name, func in notifications:
             try:
                 func()
-                print(f'[{name}]: Message push successful!')
+                logger.info(f'[{name}]: Message push successful!')
                 logger.info(f'[{name}]: 通知发送成功')
                 success_count += 1
             except Exception as e:
                 error_msg = f'[{name}]: Message push failed! Reason: {str(e)}'
-                print(error_msg)
+                logger.error(error_msg)
                 logger.error(error_msg)
                 failed_count += 1
 

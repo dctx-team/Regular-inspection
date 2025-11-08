@@ -51,8 +51,12 @@ def load_balance_hash() -> Optional[str]:
         if os.path.exists(BALANCE_HASH_FILE):
             with open(BALANCE_HASH_FILE, "r", encoding="utf-8") as f:
                 return f.read().strip()
-    except Exception:
-        pass
+    except (IOError, OSError, PermissionError) as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"读取余额hash文件失败: {e}")
+    except (ValueError, UnicodeDecodeError) as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"解析余额hash内容失败: {e}")
     return None
 
 
@@ -65,7 +69,7 @@ def save_balance_hash(balance_hash: str) -> None:
         logger.debug(f"余额hash已保存: {balance_hash}")
     except (IOError, OSError) as e:
         error_msg = f"Failed to save balance hash: {e}"
-        print(f"⚠️ {error_msg}")
+        logger.warning(f"⚠️ {error_msg}")
         logger.error(error_msg, exc_info=True)
 
 
@@ -156,9 +160,9 @@ async def main():
 
             print(f"\n🌀 正在处理 {account.name} (使用 Provider '{account.provider}')")
 
-            # 执行签到
-            checkin = CheckIn(account, provider_config)
-            results = await checkin.execute()
+            # 执行签到 - 使用async with管理浏览器生命周期
+            async with CheckIn(account, provider_config) as checkin:
+                results = await checkin.execute()
 
             total_count += len(results)
 
