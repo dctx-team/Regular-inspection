@@ -5,10 +5,15 @@
 import os
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from playwright.async_api import Page, BrowserContext
 import re
 from utils.config import AuthConfig, ProviderConfig
+
+
+# 常量定义
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+KEY_COOKIE_NAMES = ["session", "sessionid", "token", "auth", "jwt", "user_id", "csrf_token"]
 
 
 class Authenticator(ABC):
@@ -27,10 +32,49 @@ class Authenticator(ABC):
             dict: {
                 "success": bool,
                 "cookies": dict,  # 认证后的 cookies
+                "user_id": str,   # 用户ID（可选）
+                "username": str,  # 用户名（可选）
                 "error": str      # 错误信息（如果失败）
             }
         """
         pass
+
+    def _get_domain(self, url: str) -> str:
+        """从 URL 提取域名"""
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        return parsed.netloc
+
+    async def _extract_user_info(self, page: Page, cookies: Dict[str, str]) -> Tuple[Optional[str], Optional[str]]:
+        """从用户信息API提取用户ID和用户名"""
+        try:
+            import httpx
+            headers = {
+                "User-Agent": DEFAULT_USER_AGENT,
+                "Accept": "application/json"
+            }
+
+            # SSL验证 - 默认启用以确保安全
+            verify_opt = True
+            if os.getenv("DISABLE_TLS_VERIFY") == "true":
+                verify_opt = False
+                print(f"⚠️  警告: SSL验证已禁用，存在安全风险！")
+
+            async with httpx.AsyncClient(cookies=cookies, timeout=10.0, verify=verify_opt) as client:
+                response = await client.get(self.provider_config.get_user_info_url(), headers=headers)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("success") and data.get("data"):
+                        user_data = data["data"]
+                        user_id = user_data.get("id") or user_data.get("user_id") or user_data.get("userId")
+                        username = user_data.get("username") or user_data.get("name") or user_data.get("email")
+                        if user_id or username:
+                            print(f"✅ 提取到用户标识: ID={user_id}, 用户名={username}")
+                            return str(user_id) if user_id else None, username
+        except Exception as e:
+            print(f"⚠️ 提取用户信息失败: {e}")
+        
+        return None, None
 
 
 class CookiesAuthenticator(Authenticator):
@@ -69,130 +113,240 @@ class CookiesAuthenticator(Authenticator):
             final_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
 
-            return {"success": True, "cookies": cookies_dict}
+            # 尝试从用户信息API获取真实的用户标识
+            user_id, username = await self._extract_user_info(page, cookies_dict)
+
+            return {
+                "success": True,
+                "cookies": cookies_dict,
+                "user_id": user_id,
+                "username": username
+            }
 
         except Exception as e:
             return {"success": False, "error": f"Cookies auth failed: {str(e)}"}
-
-    def _get_domain(self, url: str) -> str:
-        """从 URL 提取域名"""
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        return parsed.netloc
 
 
 class EmailAuthenticator(Authenticator):
     """邮箱密码认证"""
 
+    async def _close_popups(self, page: Page):
+        """关闭可能的弹窗"""
+        try:
+            await page.keyboard.press('Escape')
+            await page.wait_for_timeout(300)
+            close_selectors = [
+                '.semi-modal .semi-modal-close',
+                '[aria-label="Close"]',
+                'button:has-text("关闭")',
+                'button:has-text("我知道了")',
+                'button:has-text("取消")',
+            ]
+            for sel in close_selectors:
+                try:
+                    close_btn = await page.query_selector(sel)
+                    if close_btn:
+                        await close_btn.click()
+                        await page.wait_for_timeout(300)
+                        break
+                except:
+                    continue
+        except:
+            pass
+
+    async def _find_and_click_email_tab(self, page: Page) -> bool:
+        """查找并点击邮箱登录选项"""
+        print(f"🔍 [{self.auth_config.username}] 查找邮箱登录选项...")
+        for sel in [
+            'button:has-text("邮箱")',
+            'a:has-text("邮箱")',
+            'button:has-text("Email")',
+            'a:has-text("Email")',
+            'text=邮箱登录',
+            'text=Email Login',
+        ]:
+            try:
+                el = await page.query_selector(sel)
+                if el:
+                    print(f"✅ [{self.auth_config.username}] 找到邮箱登录选项: {sel}")
+                    await el.click()
+                    await page.wait_for_timeout(800)
+                    return True
+            except:
+                continue
+        return False
+
+    async def _find_email_input(self, page: Page):
+        """查找邮箱输入框"""
+        print(f"🔍 [{self.auth_config.username}] 查找邮箱输入框...")
+        email_selectors = [
+            'input[type="email"]',
+            'input[name="email"]',
+            'input[name="username"]',
+            'input[name="account"]',
+            'input[id*="email" i]',
+            'input[placeholder*="邮箱" i]',
+            'input[placeholder*="Email" i]',
+            'input[placeholder*="用户名" i]',
+            'input[autocomplete="username"]',
+        ]
+        email_input = None
+        for sel in email_selectors:
+            try:
+                email_input = await page.query_selector(sel)
+                if email_input:
+                    print(f"✅ [{self.auth_config.username}] 找到邮箱输入框: {sel}")
+                    return email_input
+            except:
+                continue
+
+        # 调试信息
+        if not email_input:
+            await self._debug_page_inputs(page)
+        return None
+
+    async def _debug_page_inputs(self, page: Page):
+        """输出调试信息"""
+        try:
+            page_title = await page.title()
+            page_url = page.url
+            print(f"❌ [{self.auth_config.username}] 邮箱输入框未找到")
+            print(f"   当前页面: {page_title}")
+            print(f"   当前URL: {page_url}")
+
+            # 查找所有输入框
+            all_inputs = await page.query_selector_all('input')
+            print(f"   页面共有 {len(all_inputs)} 个输入框")
+            for i, inp in enumerate(all_inputs[:5]):  # 只显示前5个
+                try:
+                    inp_type = await inp.get_attribute('type')
+                    inp_name = await inp.get_attribute('name')
+                    inp_placeholder = await inp.get_attribute('placeholder')
+                    print(f"     输入框{i+1}: type={inp_type}, name={inp_name}, placeholder={inp_placeholder}")
+                except:
+                    print(f"     输入框{i+1}: 无法获取属性")
+        except Exception as e:
+            print(f"   调试信息获取失败: {e}")
+
+    async def _find_and_click_login_button(self, page: Page):
+        """查找并点击登录按钮"""
+        login_selectors = [
+            'button[type="submit"]',
+            'button:has-text("登录")',
+            'button:has-text("Login")',
+            'button:has-text("Sign in")',
+            'button:has-text("Sign In")',
+            'button.semi-button:has-text("登录")',
+        ]
+        for sel in login_selectors:
+            try:
+                login_button = await page.query_selector(sel)
+                if login_button:
+                    return login_button
+            except:
+                continue
+        return None
+
+    async def _check_login_success(self, page: Page) -> Tuple[bool, Optional[str]]:
+        """检查登录是否成功"""
+        current_url = page.url
+        print(f"🔍 [{self.auth_config.username}] 登录后URL: {current_url}")
+
+        # 方法1: 检查URL变化
+        if "login" not in current_url.lower():
+            print(f"✅ [{self.auth_config.username}] URL已变化，登录可能成功")
+            return True, None
+
+        print(f"⚠️ [{self.auth_config.username}] 仍在登录页面，检查其他登录指标...")
+
+        # 方法2: 检查页面标题
+        try:
+            page_title = await page.title()
+            print(f"🔍 [{self.auth_config.username}] 页面标题: {page_title}")
+            if "login" not in page_title.lower() and "console" in page_title.lower():
+                print(f"✅ [{self.auth_config.username}] 页面标题显示已登录")
+                return True, None
+        except:
+            pass
+
+        # 方法3: 检查用户界面元素
+        try:
+            user_elements = await page.query_selector_all(
+                '[class*="user"], [class*="avatar"], [class*="profile"], button:has-text("退出"), button:has-text("Logout")'
+            )
+            if user_elements:
+                print(f"✅ [{self.auth_config.username}] 找到用户界面元素，登录成功")
+                return True, None
+        except:
+            pass
+
+        # 方法4: 检查错误提示
+        error_msg = await self._check_error_messages(page)
+        if error_msg:
+            return False, error_msg
+
+        # 仍在登录页
+        if "login" in current_url.lower():
+            return False, "Login failed - still on login page (may need captcha)"
+
+        return True, None
+
+    async def _check_error_messages(self, page: Page) -> Optional[str]:
+        """检查错误提示信息"""
+        try:
+            error_selectors = ['.error', '.alert-danger', '[class*="error"]', '.toast-error', '[role="alert"]']
+            for sel in error_selectors:
+                error_msg = await page.query_selector(sel)
+                if error_msg:
+                    try:
+                        error_text = await error_msg.inner_text()
+                        if error_text and error_text.strip():
+                            # 检查是否是成功消息
+                            success_keywords = ['成功', 'success', '登录成功', 'login success']
+                            error_keywords = ['失败', '错误', 'error', 'invalid', 'incorrect', '验证码', 'captcha']
+
+                            error_text_lower = error_text.lower()
+                            is_success = any(keyword in error_text_lower for keyword in success_keywords)
+                            is_real_error = any(keyword in error_text_lower for keyword in error_keywords)
+
+                            if is_real_error:
+                                print(f"❌ [{self.auth_config.username}] 登录错误: {error_text}")
+                                return f"Login failed: {error_text}"
+                            elif is_success:
+                                print(f"✅ [{self.auth_config.username}] 检测到成功消息: {error_text}")
+                            else:
+                                print(f"⚠️ [{self.auth_config.username}] 检测到消息: {error_text}")
+                    except:
+                        pass
+        except:
+            pass
+        return None
+
     async def authenticate(self, page: Page, context: BrowserContext) -> Dict[str, Any]:
         """使用邮箱密码登录"""
         try:
             print(f"ℹ️ Starting Email authentication")
-
             print(f"🔍 [{self.auth_config.username}] 访问登录页: {self.provider_config.get_login_url()}")
+
             # 访问登录页
             await page.goto(self.provider_config.get_login_url())
             await page.wait_for_load_state("domcontentloaded")
-            # 等待页面主要内容渲染
             await page.wait_for_timeout(1500)
 
-            # 尝试关闭可能的弹窗
-            try:
-                await page.keyboard.press('Escape')
-                await page.wait_for_timeout(300)
-                close_selectors = [
-                    '.semi-modal .semi-modal-close',
-                    '[aria-label="Close"]',
-                    'button:has-text("关闭")',
-                    'button:has-text("我知道了")',
-                    'button:has-text("取消")',
-                ]
-                for sel in close_selectors:
-                    try:
-                        close_btn = await page.query_selector(sel)
-                        if close_btn:
-                            await close_btn.click()
-                            await page.wait_for_timeout(300)
-                            break
-                    except:
-                        continue
-            except:
-                pass
+            # 关闭可能的弹窗
+            await self._close_popups(page)
 
-            # 如有"邮箱登录"tab，优先点击
-            print(f"🔍 [{self.auth_config.username}] 查找邮箱登录选项...")
-            for sel in [
-                'button:has-text("邮箱")',
-                'a:has-text("邮箱")',
-                'button:has-text("Email")',
-                'a:has-text("Email")',
-                'text=邮箱登录',
-                'text=Email Login',
-            ]:
-                try:
-                    el = await page.query_selector(sel)
-                    if el:
-                        print(f"✅ [{self.auth_config.username}] 找到邮箱登录选项: {sel}")
-                        await el.click()
-                        await page.wait_for_timeout(800)
-                        break
-                except:
-                    continue
+            # 点击邮箱登录选项（如果有）
+            await self._find_and_click_email_tab(page)
 
             # 等待登录表单加载
             await page.wait_for_timeout(2000)
 
-            # 查找邮箱输入框
-            print(f"🔍 [{self.auth_config.username}] 查找邮箱输入框...")
-            email_selectors = [
-                'input[type="email"]',
-                'input[name="email"]',
-                'input[name="username"]',
-                'input[name="account"]',
-                'input[id*="email" i]',
-                'input[placeholder*="邮箱" i]',
-                'input[placeholder*="Email" i]',
-                'input[placeholder*="用户名" i]',
-                'input[autocomplete="username"]',
-            ]
-            email_input = None
-            found_selector = None
-            for sel in email_selectors:
-                try:
-                    email_input = await page.query_selector(sel)
-                    if email_input:
-                        found_selector = sel
-                        print(f"✅ [{self.auth_config.username}] 找到邮箱输入框: {sel}")
-                        break
-                except:
-                    continue
-
+            # 查找邮箱和密码输入框
+            email_input = await self._find_email_input(page)
             if not email_input:
-                # 调试信息：输出页面当前内容
-                try:
-                    page_title = await page.title()
-                    page_url = page.url
-                    print(f"❌ [{self.auth_config.username}] 邮箱输入框未找到")
-                    print(f"   当前页面: {page_title}")
-                    print(f"   当前URL: {page_url}")
-
-                    # 查找所有输入框
-                    all_inputs = await page.query_selector_all('input')
-                    print(f"   页面共有 {len(all_inputs)} 个输入框")
-                    for i, inp in enumerate(all_inputs[:5]):  # 只显示前5个
-                        try:
-                            inp_type = await inp.get_attribute('type')
-                            inp_name = await inp.get_attribute('name')
-                            inp_placeholder = await inp.get_attribute('placeholder')
-                            print(f"     输入框{i+1}: type={inp_type}, name={inp_name}, placeholder={inp_placeholder}")
-                        except:
-                            print(f"     输入框{i+1}: 无法获取属性")
-                except Exception as e:
-                    print(f"   调试信息获取失败: {e}")
-
                 return {"success": False, "error": "Email input field not found"}
 
-            # 查找密码输入框
             password_input = await page.query_selector('input[type="password"]')
             if not password_input:
                 return {"success": False, "error": "Password input field not found"}
@@ -202,23 +356,7 @@ class EmailAuthenticator(Authenticator):
             await password_input.fill(self.auth_config.password)
 
             # 查找并点击登录按钮
-            login_selectors = [
-                'button[type="submit"]',
-                'button:has-text("登录")',
-                'button:has-text("Login")',
-                'button:has-text("Sign in")',
-                'button:has-text("Sign In")',
-                'button.semi-button:has-text("登录")',
-            ]
-            login_button = None
-            for sel in login_selectors:
-                try:
-                    login_button = await page.query_selector(sel)
-                    if login_button:
-                        break
-                except:
-                    continue
-
+            login_button = await self._find_and_click_login_button(page)
             if not login_button:
                 return {"success": False, "error": "Login button not found"}
 
@@ -227,85 +365,15 @@ class EmailAuthenticator(Authenticator):
 
             # 等待页面跳转或响应
             try:
-                # 等待页面变化，可能是跳转或内容更新
                 await page.wait_for_load_state("networkidle", timeout=10000)
-                await page.wait_for_timeout(2000)  # 额外等待确保页面稳定
+                await page.wait_for_timeout(2000)
             except Exception:
                 print(f"⚠️ [{self.auth_config.username}] 页面加载超时，继续检查登录状态...")
 
-            # 多种方式检查登录是否成功
-            current_url = page.url
-            print(f"🔍 [{self.auth_config.username}] 登录后URL: {current_url}")
-
-            # 方法1: 检查URL变化
-            if "login" not in current_url.lower():
-                print(f"✅ [{self.auth_config.username}] URL已变化，登录可能成功")
-            else:
-                print(f"⚠️ [{self.auth_config.username}] 仍在登录页面，检查其他登录指标...")
-
-            # 方法2: 检查页面标题变化
-            try:
-                page_title = await page.title()
-                print(f"🔍 [{self.auth_config.username}] 页面标题: {page_title}")
-                if "login" not in page_title.lower() and "console" in page_title.lower():
-                    print(f"✅ [{self.auth_config.username}] 页面标题显示已登录")
-                else:
-                    print(f"⚠️ [{self.auth_config.username}] 页面标题未显示登录")
-            except:
-                pass
-
-            # 方法3: 检查是否有用户信息相关元素
-            try:
-                user_elements = await page.query_selector_all('[class*="user"], [class*="avatar"], [class*="profile"], button:has-text("退出"), button:has-text("Logout")')
-                if user_elements:
-                    print(f"✅ [{self.auth_config.username}] 找到用户界面元素，登录成功")
-                else:
-                    print(f"⚠️ [{self.auth_config.username}] 未找到用户界面元素")
-            except:
-                pass
-
-            # 方法4: 检查是否有错误提示（但排除成功消息）
-            try:
-                error_selectors = ['.error', '.alert-danger', '[class*="error"]', '.toast-error', '[role="alert"]']
-                error_found = False
-                for sel in error_selectors:
-                    error_msg = await page.query_selector(sel)
-                    if error_msg:
-                        try:
-                            error_text = await error_msg.inner_text()
-                            if error_text and error_text.strip():
-                                # 检查是否是成功消息，避免误判
-                                success_keywords = ['成功', 'success', '登录成功', 'login success', '登录成功!']
-                                error_keywords = ['失败', '错误', 'error', '失败', 'invalid', 'incorrect', '验证码', 'captcha']
-
-                                error_text_lower = error_text.lower()
-                                is_success = any(keyword in error_text_lower for keyword in success_keywords)
-                                is_real_error = any(keyword in error_text_lower for keyword in error_keywords)
-
-                                if is_real_error:
-                                    print(f"❌ [{self.auth_config.username}] 登录错误: {error_text}")
-                                    return {"success": False, "error": f"Login failed: {error_text}"}
-                                elif is_success:
-                                    print(f"✅ [{self.auth_config.username}] 检测到成功消息: {error_text}")
-                                else:
-                                    # 不明确的消息，记录但不作为错误
-                                    print(f"⚠️ [{self.auth_config.username}] 检测到消息: {error_text}")
-                        except:
-                            pass
-                        error_found = True
-                        break
-
-                # 只有明确发现错误时才返回失败
-                if error_found and any(keyword in (await page.query_selector_all('.error, .alert-danger, [class*="error"]')) for keyword in ['']):
-                    # 这个条件现在不会误触发，因为我们已经处理了具体内容
-                    pass
-            except:
-                pass
-
-            # 最终判断：如果还在登录页，但没找到明确错误，可能是验证码或其他问题
-            if "login" in current_url.lower():
-                print(f"❌ [{self.auth_config.username}] 仍在登录页面，可能需要验证码或登录失败")
-                return {"success": False, "error": "Login failed - still on login page (may need captcha)"}
+            # 检查登录是否成功
+            success, error_msg = await self._check_login_success(page)
+            if not success:
+                return {"success": False, "error": error_msg}
 
             # 获取 cookies
             print(f"🍪 [{self.auth_config.username}] 获取登录cookies...")
@@ -317,7 +385,16 @@ class EmailAuthenticator(Authenticator):
                 print(f"⚠️ [{self.auth_config.username}] 未找到session cookie，但继续尝试...")
 
             print(f"✅ [{self.auth_config.username}] 邮箱认证完成，获取到 {len(cookies_dict)} 个cookies")
-            return {"success": True, "cookies": cookies_dict}
+
+            # 尝试从用户信息API获取真实的用户标识
+            user_id, username = await self._extract_user_info(page, cookies_dict)
+
+            return {
+                "success": True,
+                "cookies": cookies_dict,
+                "user_id": user_id,
+                "username": username
+            }
 
         except Exception as e:
             return {"success": False, "error": f"Email auth failed: {str(e)}"}
@@ -396,18 +473,17 @@ class GitHubAuthenticator(Authenticator):
             print(f"🍪 [{self.auth_config.username}] GitHub OAuth认证完成，获取到 {len(cookies_dict)} 个cookies")
 
             # 检查关键认证cookies
-            key_cookies = ["session", "sessionid", "token", "auth", "jwt", "user_id", "csrf_token"]
             found_key_cookies = []
-            for cookie_name in key_cookies:
+            for cookie_name in KEY_COOKIE_NAMES:
                 if cookie_name in cookies_dict:
                     found_key_cookies.append(cookie_name)
                     print(f"   ✅ 找到关键cookie: {cookie_name}")
 
             if not found_key_cookies:
                 print(f"   ⚠️ 未找到标准认证cookie，列出所有cookies:")
-                for i, (name, value) in enumerate(cookies_dict.items()):
+                for i, name in enumerate(list(cookies_dict.keys())):
                     if i < 5:  # 只显示前5个
-                        print(f"      {name}: {value[:20]}...")
+                        print(f"      {name}: ***")
                     else:
                         print(f"      ... 还有 {len(cookies_dict) - 5} 个cookies")
                         break
@@ -425,7 +501,15 @@ class GitHubAuthenticator(Authenticator):
                 important_cookies = cookies_dict
                 print(f"   🔄 返回所有cookies供API调用尝试")
 
-            return {"success": True, "cookies": important_cookies}
+            # 尝试从用户信息API获取真实的用户标识
+            user_id, username = await self._extract_user_info(page, important_cookies)
+
+            return {
+                "success": True,
+                "cookies": important_cookies,
+                "user_id": user_id,
+                "username": username
+            }
 
         except Exception as e:
             return {"success": False, "error": f"GitHub auth failed: {str(e)}"}
@@ -651,18 +735,17 @@ class LinuxDoAuthenticator(Authenticator):
             print(f"🍪 [{self.auth_config.username}] LinuxDO OAuth认证完成，获取到 {len(cookies_dict)} 个cookies")
 
             # 检查关键认证cookies
-            key_cookies = ["session", "sessionid", "token", "auth", "jwt", "user_id", "csrf_token"]
             found_key_cookies = []
-            for cookie_name in key_cookies:
+            for cookie_name in KEY_COOKIE_NAMES:
                 if cookie_name in cookies_dict:
                     found_key_cookies.append(cookie_name)
                     print(f"   ✅ 找到关键cookie: {cookie_name}")
 
             if not found_key_cookies:
                 print(f"   ⚠️ 未找到标准认证cookie，列出所有cookies:")
-                for i, (name, value) in enumerate(cookies_dict.items()):
+                for i, name in enumerate(list(cookies_dict.keys())):
                     if i < 5:  # 只显示前5个
-                        print(f"      {name}: {value[:20]}...")
+                        print(f"      {name}: ***")
                     else:
                         print(f"      ... 还有 {len(cookies_dict) - 5} 个cookies")
                         break
@@ -680,7 +763,15 @@ class LinuxDoAuthenticator(Authenticator):
                 important_cookies = cookies_dict
                 print(f"   🔄 返回所有cookies供API调用尝试")
 
-            return {"success": True, "cookies": important_cookies}
+            # 尝试从用户信息API获取真实的用户标识
+            user_id, username = await self._extract_user_info(page, important_cookies)
+
+            return {
+                "success": True,
+                "cookies": important_cookies,
+                "user_id": user_id,
+                "username": username
+            }
 
         except Exception as e:
             return {"success": False, "error": f"Linux.do auth failed: {str(e)}"}

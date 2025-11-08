@@ -1,9 +1,13 @@
 import os
 import smtplib
+import logging
 from email.mime.text import MIMEText
 from typing import Literal
 
 import httpx
+
+
+logger = logging.getLogger(__name__)
 
 
 class NotificationKit:
@@ -166,12 +170,28 @@ class NotificationKit:
 			('WeChat Work', lambda: self.send_wecom(title, content)),
 		]
 
+		success_count = 0
+		failed_count = 0
+
 		for name, func in notifications:
 			try:
 				func()
 				print(f'[{name}]: Message push successful!')
+				logger.info(f'[{name}]: 通知发送成功')
+				success_count += 1
 			except Exception as e:
-				print(f'[{name}]: Message push failed! Reason: {str(e)}')
+				error_msg = f'[{name}]: Message push failed! Reason: {str(e)}'
+				print(error_msg)
+				logger.error(error_msg)
+				failed_count += 1
+
+		# 记录总体通知结果
+		if success_count == 0 and failed_count > 0:
+			logger.error(f'所有通知方式都失败 ({failed_count} 个)')
+		elif failed_count > 0:
+			logger.warning(f'部分通知失败: 成功 {success_count}, 失败 {failed_count}')
+		else:
+			logger.info(f'所有通知发送成功 ({success_count} 个)')
 
 
 notify = NotificationKit()
