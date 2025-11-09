@@ -583,6 +583,13 @@ class GitHubAuthenticator(Authenticator):
                     status_data = status_response.json()
                 except Exception as e:
                     logger.error(f"❌ [{self.auth_config.username}] 解析 status API 响应失败: {e}")
+                    # 检查是否是 HTML 响应（可能是 Cloudflare 验证页面）
+                    content_type = status_response.headers.get('content-type', '')
+                    if 'text/html' in content_type:
+                        logger.error(f"❌ [{self.auth_config.username}] API 返回 HTML 而非 JSON，可能是 Cloudflare 验证页面")
+                        logger.info(f"   响应内容片段: {status_response.text[:300]}")
+                        return None
+                    logger.info(f"   响应内容: {status_response.text[:200]}")
                     return None
 
                 if not status_data.get("success"):
@@ -641,17 +648,27 @@ class GitHubAuthenticator(Authenticator):
             if not await self._init_page_and_check_cloudflare(page):
                 return {"success": False, "error": "Cloudflare verification timeout"}
 
-            # 第一步：获取初始cookies
+            # 第一步：等待额外时间确保 Cloudflare 验证完全通过
+            await page.wait_for_timeout(3000)
+            
+            # 第二步：获取通过 Cloudflare 验证后的 cookies
             logger.info(f"🔑 [{self.auth_config.username}] 获取初始cookies...")
-            await page.wait_for_timeout(2000)
             initial_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in initial_cookies}
+            logger.info(f"🍪 [{self.auth_config.username}] 获取到 {len(cookies_dict)} 个cookies用于API请求")
 
-            # 第二步：获取 GitHub OAuth 参数
+            # 第三步：获取 GitHub OAuth 参数
             logger.info(f"🔑 [{self.auth_config.username}] 获取 GitHub OAuth 参数...")
             oauth_params = await self._get_github_oauth_params(cookies_dict)
             if not oauth_params:
-                return {"success": False, "error": "Failed to get GitHub OAuth parameters"}
+                logger.warning(f"⚠️ [{self.auth_config.username}] 首次获取失败，等待5秒后重试...")
+                await page.wait_for_timeout(5000)
+                # 重新获取 cookies 并重试
+                retry_cookies = await context.cookies()
+                retry_cookies_dict = {cookie["name"]: cookie["value"] for cookie in retry_cookies}
+                oauth_params = await self._get_github_oauth_params(retry_cookies_dict)
+                if not oauth_params:
+                    return {"success": False, "error": "Failed to get GitHub OAuth parameters after retry"}
 
             client_id = oauth_params["client_id"]
             auth_state = oauth_params["auth_state"]
@@ -832,6 +849,13 @@ class LinuxDoAuthenticator(Authenticator):
                         data = response.json()
                     except Exception as e:
                         logger.error(f"❌ [{self.auth_config.username}] 解析 status API 响应失败: {e}")
+                        # 检查是否是 HTML 响应（可能是 Cloudflare 验证页面）
+                        content_type = response.headers.get('content-type', '')
+                        if 'text/html' in content_type:
+                            logger.error(f"❌ [{self.auth_config.username}] API 返回 HTML 而非 JSON，可能是 Cloudflare 验证页面")
+                            # 检查是否包含 Cloudflare 标记
+                            if 'cloudflare' in response.text.lower() or 'verification' in response.text.lower():
+                                logger.error(f"❌ [{self.auth_config.username}] 确认是 Cloudflare 验证页面，需要先通过浏览器访问")
                         logger.info(f"   响应内容: {response.text[:200]}")
                         return None
                     
@@ -924,17 +948,27 @@ class LinuxDoAuthenticator(Authenticator):
             if not await self._init_page_and_check_cloudflare(page):
                 return {"success": False, "error": "Cloudflare verification timeout"}
 
-            # 第一步：获取初始cookies（用于后续API请求）
+            # 第一步：等待额外时间确保 Cloudflare 验证完全通过
+            await page.wait_for_timeout(3000)
+            
+            # 第二步：获取通过 Cloudflare 验证后的 cookies
             logger.info(f"🔑 [{self.auth_config.username}] 获取初始cookies...")
-            await page.wait_for_timeout(2000)
             initial_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in initial_cookies}
+            logger.info(f"🍪 [{self.auth_config.username}] 获取到 {len(cookies_dict)} 个cookies用于API请求")
 
-            # 第二步：获取 OAuth client_id
+            # 第三步：获取 OAuth client_id
             logger.info(f"🔑 [{self.auth_config.username}] 获取 LinuxDO OAuth client_id...")
             client_id_result = await self._get_auth_client_id(cookies_dict)
             if not client_id_result:
-                return {"success": False, "error": "Failed to get LinuxDO client_id"}
+                logger.warning(f"⚠️ [{self.auth_config.username}] 首次获取失败，等待5秒后重试...")
+                await page.wait_for_timeout(5000)
+                # 重新获取 cookies 并重试
+                retry_cookies = await context.cookies()
+                retry_cookies_dict = {cookie["name"]: cookie["value"] for cookie in retry_cookies}
+                client_id_result = await self._get_auth_client_id(retry_cookies_dict)
+                if not client_id_result:
+                    return {"success": False, "error": "Failed to get LinuxDO client_id after retry"}
 
             client_id = client_id_result["client_id"]
 
@@ -985,11 +1019,62 @@ class LinuxDoAuthenticator(Authenticator):
                     if login_button:
                         await login_button.click()
                         logger.info(f"✅ [{self.auth_config.username}] 点击登录按钮")
+                        
+                        # 等待页面跳转
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=10000)
+                        except:
+                            logger.warning(f"⚠️ [{self.auth_config.username}] 页面加载超时，继续...")
+                        
                         await page.wait_for_timeout(3000)
+                        
+                        # 检查是否还在登录页面
+                        current_url_after_login = page.url
+                        logger.info(f"🔍 [{self.auth_config.username}] 登录后URL: {current_url_after_login}")
+                        
+                        if "/login" in current_url_after_login:
+                            # 检查是否有错误消息
+                            try:
+                                error_elem = await page.query_selector('.alert-error, .error, [class*="error"]')
+                                if error_elem:
+                                    error_text = await error_elem.inner_text()
+                                    logger.error(f"❌ [{self.auth_config.username}] 登录失败: {error_text}")
+                                    return {"success": False, "error": f"Login failed: {error_text}"}
+                            except:
+                                pass
+                            
+                            # 检查是否需要验证码
+                            captcha_elem = await page.query_selector('[class*="captcha"], [id*="captcha"], iframe[src*="recaptcha"]')
+                            if captcha_elem:
+                                logger.error(f"❌ [{self.auth_config.username}] 需要验证码，无法自动处理")
+                                return {"success": False, "error": "Login requires CAPTCHA verification"}
+                            
+                            logger.warning(f"⚠️ [{self.auth_config.username}] 登录后仍在登录页面，可能需要人工干预")
+                else:
+                    logger.error(f"❌ [{self.auth_config.username}] 未找到登录表单")
+                    return {"success": False, "error": "Login form not found"}
 
             # 第六步：等待授权按钮并点击
             try:
                 logger.info(f"⏳ [{self.auth_config.username}] 等待授权按钮...")
+                
+                # 先检查当前URL
+                current_check_url = page.url
+                logger.info(f"🔍 [{self.auth_config.username}] 当前URL: {current_check_url}")
+                
+                # 如果还在登录页面，说明登录失败
+                if "/login" in current_check_url:
+                    logger.error(f"❌ [{self.auth_config.username}] 仍在登录页面，无法继续")
+                    
+                    # 尝试获取页面内容用于调试
+                    try:
+                        page_title = await page.title()
+                        logger.info(f"   页面标题: {page_title}")
+                    except:
+                        pass
+                    
+                    return {"success": False, "error": "Still on login page - credentials may be invalid or CAPTCHA required"}
+                
                 await page.wait_for_selector('a[href^="/oauth2/approve"]', timeout=30000)
 
                 allow_btn = await page.query_selector('a[href^="/oauth2/approve"]')
@@ -1002,6 +1087,18 @@ class LinuxDoAuthenticator(Authenticator):
             except Exception as e:
                 logger.error(f"❌ [{self.auth_config.username}] 等待授权按钮超时: {e}")
                 logger.info(f"   当前URL: {page.url}")
+                
+                # 获取更多调试信息
+                try:
+                    page_title = await page.title()
+                    logger.info(f"   页面标题: {page_title}")
+                    
+                    # 检查页面上是否有其他可用元素
+                    buttons = await page.query_selector_all('button, a.btn')
+                    logger.info(f"   页面上找到 {len(buttons)} 个按钮元素")
+                except Exception as debug_error:
+                    logger.warning(f"   无法获取调试信息: {debug_error}")
+                
                 return {"success": False, "error": f"Authorization button timeout: {sanitize_exception(e)}"}
 
             # 第七步：等待OAuth回调
