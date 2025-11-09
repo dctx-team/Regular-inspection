@@ -1,6 +1,36 @@
 # Router签到脚本修复总结
 
-## 最新修复 (2025-11-09) - v3.4.0
+## 最新修复 (2025-11-09) - v3.5.0
+
+### AgentRouter 优化 - ✅ 核心优化
+**问题**: AgentRouter 所有账号都因 Cloudflare 超时失败
+
+**参考方案**: 从 `newapi-ai-check-in-main` 项目配置中发现关键差异
+- AgentRouter 不需要 WAF cookies (`bypass_method=None`)
+- AgentRouter 无独立签到接口，查询用户信息时自动签到 (`sign_in_path=None`)
+
+**修复内容** (checkin.py:156-231):
+```python
+# 对 AgentRouter 跳过 WAF cookies
+if self.provider.name.lower() != "agentrouter":
+    waf_cookies = await self._get_waf_cookies(page, context)
+else:
+    self.logger.info("AgentRouter 不需要 WAF cookies，跳过")
+
+# AgentRouter 通过查询用户信息自动签到
+if self.provider.name.lower() == "agentrouter":
+    user_info = await self._get_user_info(auth_cookies, auth_config)
+    # 直接返回用户信息，不调用签到接口
+```
+
+**效果**:
+- ✅ AgentRouter 跳过不必要的 WAF cookies 获取
+- ✅ AgentRouter 避免 Cloudflare 超时问题
+- ✅ 预期 AgentRouter 4个账号成功率大幅提升
+
+---
+
+## v3.4.0 修复 (2025-11-09)
 
 ### 1. LinuxDO OAuth完整重写 - ✅ 核心修复
 **问题**: LinuxDO OAuth认证根本实现错误，只是点击按钮，没有正确的API调用流程
