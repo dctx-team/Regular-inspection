@@ -186,7 +186,7 @@ async def main():
                     successful_methods.append(auth_method)
 
                     # 展示用户信息（若可用）与余额信息
-                    if user_info and user_info.get("success"):
+                    if user_info and user_info.get("success") and user_info.get("display"):
                         account_result += f"    💰 {user_info['display']}\n"
 
                         # 记录余额信息
@@ -211,6 +211,9 @@ async def main():
                     elif user_info and user_info.get("message"):
                         # 签到成功但无法获取详细信息时给出简要信息
                         account_result += f"    ℹ️ {user_info['message']}\n"
+                    else:
+                        # 签到成功但用户信息不完整时给出提示
+                        account_result += f"    ✅ 签到完成(用户信息暂时无法获取)\n"
                 else:
                     # 仅在认证/签到失败时计入失败方法
                     failed_methods.append(auth_method)
