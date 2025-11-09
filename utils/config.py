@@ -128,8 +128,8 @@ class AppConfig:
                 login_url="https://anyrouter.top/login",
                 checkin_url="https://anyrouter.top/api/user/sign_in",
                 user_info_url="https://anyrouter.top/api/user/self",
-                status_url="https://anyrouter.top/api/user/status",
-                auth_state_url="https://anyrouter.top/api/oauth/auth-state"
+                status_url="https://anyrouter.top/api/status",
+                auth_state_url="https://anyrouter.top/api/oauth/state"
             ),
             "agentrouter": ProviderConfig(
                 name="AgentRouter",
@@ -138,8 +138,8 @@ class AppConfig:
                 # AgentRouter 使用 sign_in 接口，如果404则自动查询用户信息进行保活
                 checkin_url="https://agentrouter.org/api/user/sign_in",
                 user_info_url="https://agentrouter.org/api/user/self",
-                status_url="https://agentrouter.org/api/user/status",
-                auth_state_url="https://agentrouter.org/api/oauth/auth-state"
+                status_url="https://agentrouter.org/api/status",
+                auth_state_url="https://agentrouter.org/api/oauth/state"
             )
         }
 
