@@ -49,7 +49,7 @@ class Authenticator(ABC):
         """
         pass
 
-    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 30) -> bool:
+    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 60) -> bool:
         """等待Cloudflare验证完成"""
         try:
             logger.info(f"🛡️ 检测到可能的Cloudflare验证，等待完成...")
@@ -90,6 +90,31 @@ class Authenticator(ABC):
         from urllib.parse import urlparse
         parsed = urlparse(url)
         return parsed.netloc
+
+    async def _wait_for_session_cookies(self, context: BrowserContext, max_wait_seconds: int = 10) -> bool:
+        """等待会话cookies出现"""
+        try:
+            logger.info(f"⏳ 等待会话cookies设置...")
+            start_time = asyncio.get_event_loop().time()
+
+            while asyncio.get_event_loop().time() - start_time < max_wait_seconds:
+                cookies = await context.cookies()
+                cookies_dict = {cookie["name"]: cookie["value"] for cookie in cookies}
+
+                # 检查是否有会话相关的cookies
+                found_session = any(name in cookies_dict for name in KEY_COOKIE_NAMES)
+                if found_session:
+                    logger.info(f"✅ 检测到会话cookies")
+                    return True
+
+                await asyncio.sleep(0.5)  # 每500ms检查一次
+
+            logger.warning(f"⚠️ 等待会话cookies超时({max_wait_seconds}s)")
+            return False
+
+        except Exception as e:
+            logger.warning(f"⚠️ 等待会话cookies异常: {e}")
+            return False
 
     async def _extract_user_info(self, page: Page, cookies: Dict[str, str]) -> Tuple[Optional[str], Optional[str]]:
         """从用户信息API提取用户ID和用户名"""
@@ -132,8 +157,9 @@ class Authenticator(ABC):
                 logger.info(f"   ✅ 找到关键cookie: {name}")
         else:
             logger.warning(f"   ⚠️ 未找到标准认证cookie")
-            for i, name in enumerate(list(cookies_dict.keys())[:5]):
-                logger.info(f"      {name}: ***")
+            for i, cookie in enumerate(final_cookies[:5]):
+                cookie_domain = cookie.get('domain', 'N/A')
+                logger.info(f"      {cookie['name']}: *** (domain: {cookie_domain})")
             if len(cookies_dict) > 5:
                 logger.info(f"      ... 还有 {len(cookies_dict) - 5} 个cookies")
 
@@ -484,6 +510,11 @@ class GitHubAuthenticator(Authenticator):
             target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
             await page.wait_for_url(target_pattern, timeout=20000)
 
+            # 等待cookies传播完成
+            logger.info(f"🔄 [{self.auth_config.username}] OAuth回调完成，等待cookies设置...")
+            await page.wait_for_timeout(3000)  # 等待3秒让cookies传播
+            await self._wait_for_session_cookies(context, max_wait_seconds=10)
+
             final_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
 
@@ -653,6 +684,11 @@ class LinuxDoAuthenticator(Authenticator):
 
             target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
             await page.wait_for_url(target_pattern, timeout=20000)
+
+            # 等待cookies传播完成
+            logger.info(f"🔄 [{self.auth_config.username}] OAuth回调完成，等待cookies设置...")
+            await page.wait_for_timeout(3000)  # 等待3秒让cookies传播
+            await self._wait_for_session_cookies(context, max_wait_seconds=10)
 
             final_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}

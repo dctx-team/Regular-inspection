@@ -135,4 +135,15 @@ LINUXDO_BUTTON_SELECTORS = [
     'a[href*="linux.do"]',
     'a[href*="linuxdo"]',
     '[data-provider*="linux"]',
+    # 通配符匹配（处理各种变体）
+    'button:text-is("LinuxDO")',
+    'a:text-is("LinuxDO")',
+    # 图标+文本组合
+    'button:has(svg) >> :has-text("Linux")',
+    'a:has(svg) >> :has-text("Linux")',
+    # class或id包含linux关键词
+    'button[class*="linux" i]',
+    'a[class*="linux" i]',
+    'button[id*="linux" i]',
+    'a[id*="linux" i]',
 ]
