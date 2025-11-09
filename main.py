@@ -91,29 +91,25 @@ async def main():
     """主函数"""
     logger = setup_logging()
 
-    print("=" * 80)
-    print("🚀 Router平台多账号自动签到脚本 (重构版)")
-    print(f"🕒 执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 80)
-
-    logger.info("="* 80)
-    logger.info("程序启动")
-    logger.info(f"执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 80)
+    logger.info("🚀 Router平台多账号自动签到脚本 (重构版)")
+    logger.info(f"🕒 执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 80)
 
     # 加载应用配置
     app_config = AppConfig.load_from_env()
-    print(f"\n⚙️ 已加载 {len(app_config.providers)} 个 Provider 配置")
+    logger.info(f"\n⚙️ 已加载 {len(app_config.providers)} 个 Provider 配置")
     for name, provider in app_config.providers.items():
-        print(f"   - {provider.name} ({name})")
+        logger.info(f"   - {provider.name} ({name})")
 
     # 加载账号配置
     accounts = load_accounts()
     if not accounts:
-        print("\n❌ 未找到任何账号配置，程序退出")
-        print("💡 提示: 请配置 ANYROUTER_ACCOUNTS、AGENTROUTER_ACCOUNTS 或 ACCOUNTS 环境变量")
+        logger.error("\n❌ 未找到任何账号配置，程序退出")
+        logger.info("💡 提示: 请配置 ANYROUTER_ACCOUNTS、AGENTROUTER_ACCOUNTS 或 ACCOUNTS 环境变量")
         return 1
 
-    print(f"\n⚙️ 找到 {len(accounts)} 个账号配置")
+    logger.info(f"\n⚙️ 找到 {len(accounts)} 个账号配置")
 
     # 验证账号配置
     valid_accounts = []
@@ -121,15 +117,15 @@ async def main():
         if validate_account(account, i):
             valid_accounts.append(account)
             auth_methods = ", ".join([auth.method for auth in account.auth_configs])
-            print(f"   ✅ {account.name} ({account.provider}) - 认证方式: {auth_methods}")
+            logger.info(f"   ✅ {account.name} ({account.provider}) - 认证方式: {auth_methods}")
         else:
-            print(f"   ❌ {account.name} - 配置无效，跳过")
+            logger.warning(f"   ❌ {account.name} - 配置无效，跳过")
 
     if not valid_accounts:
-        print("\n❌ 没有有效的账号配置，程序退出")
+        logger.error("\n❌ 没有有效的账号配置，程序退出")
         return 1
 
-    print(f"\n✅ 共 {len(valid_accounts)} 个账号通过验证\n")
+    logger.info(f"\n✅ 共 {len(valid_accounts)} 个账号通过验证\n")
 
     # 加载余额hash
     last_balance_hash = load_balance_hash()
@@ -151,14 +147,14 @@ async def main():
             # 获取 Provider 配置
             provider_config = app_config.get_provider(account.provider)
             if not provider_config:
-                print(f"❌ {account.name}: Provider '{account.provider}' 配置未找到")
+                logger.error(f"❌ {account.name}: Provider '{account.provider}' 配置未找到")
                 need_notify = True
                 notification_content.append(
                     f"[FAIL] {account.name}: Provider '{account.provider}' 配置未找到"
                 )
                 continue
 
-            print(f"\n🌀 正在处理 {account.name} (使用 Provider '{account.provider}')")
+            logger.info(f"\n🌀 正在处理 {account.name} (使用 Provider '{account.provider}')")
 
             # 执行签到 - 使用async with管理浏览器生命周期
             async with CheckIn(account, provider_config) as checkin:
@@ -226,12 +222,12 @@ async def main():
             # 如果所有认证方式都失败，需要通知
             if not account_success and results:
                 need_notify = True
-                print(f"🔔 {account.name} 所有认证方式都失败，将发送通知")
+                logger.warning(f"🔔 {account.name} 所有认证方式都失败，将发送通知")
 
             # 如果有部分失败，也通知
             if failed_methods and successful_methods:
                 need_notify = True
-                print(f"🔔 {account.name} 有部分认证方式失败，将发送通知")
+                logger.warning(f"🔔 {account.name} 有部分认证方式失败，将发送通知")
 
             # 添加统计信息
             success_count_methods = len(successful_methods)
@@ -261,19 +257,19 @@ async def main():
 
     # 检查余额变化
     current_balance_hash = generate_balance_hash(current_balances) if current_balances else None
-    print(f"\n\nℹ️ 当前余额 hash: {current_balance_hash}, 上次余额 hash: {last_balance_hash}")
+    logger.info(f"\n\nℹ️ 当前余额 hash: {current_balance_hash}, 上次余额 hash: {last_balance_hash}")
 
     if current_balance_hash:
         if last_balance_hash is None:
             # 首次运行
             need_notify = True
-            print("🔔 首次运行检测到，将发送通知")
+            logger.info("🔔 首次运行检测到，将发送通知")
         elif current_balance_hash != last_balance_hash:
             # 余额有变化
             need_notify = True
-            print("🔔 余额变化检测到，将发送通知")
+            logger.info("🔔 余额变化检测到，将发送通知")
         else:
-            print("ℹ️ 余额无变化")
+            logger.info("ℹ️ 余额无变化")
 
     # 保存当前余额hash
     if current_balance_hash:
@@ -300,19 +296,19 @@ async def main():
 
         notify_content = "\n\n".join([time_info, "\n".join(notification_content), "\n".join(summary)])
 
-        print("\n" + notify_content)
+        logger.info("\n" + notify_content)
         notify.push_message("Router签到提醒", notify_content, msg_type="text")
-        print("\n🔔 通知已发送")
+        logger.info("\n🔔 通知已发送")
     else:
         # 区分无余额数据和余额无变化两种情况
         if current_balance_hash:
-            print("\nℹ️ 所有账号成功且余额无变化，跳过通知")
+            logger.info("\nℹ️ 所有账号成功且余额无变化，跳过通知")
         else:
-            print("\nℹ️ 所有账号成功（未获取到余额数据），跳过通知")
+            logger.info("\nℹ️ 所有账号成功（未获取到余额数据），跳过通知")
 
-    print("\n" + "=" * 80)
-    print(f"✅ 程序执行完成 - 成功: {success_count}/{total_count}")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info(f"✅ 程序执行完成 - 成功: {success_count}/{total_count}")
+    logger.info("=" * 80)
 
     logger.info("=" * 80)
     logger.info(f"程序执行完成 - 成功: {success_count}/{total_count}")
