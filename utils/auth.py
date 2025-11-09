@@ -49,8 +49,8 @@ class Authenticator(ABC):
         """
         pass
 
-    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 45) -> bool:
-        """等待Cloudflare验证完成（优化版）"""
+    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 60) -> bool:
+        """等待Cloudflare验证完成（优化版）- 增加到60秒"""
         try:
             # 检查是否跳过Cloudflare验证
             if os.getenv("SKIP_CLOUDFLARE_CHECK", "false").lower() == "true":
@@ -229,8 +229,8 @@ class Authenticator(ABC):
     async def _init_page_and_check_cloudflare(self, page: Page) -> bool:
         """初始化页面并检查Cloudflare"""
         try:
-            await page.goto(self.provider_config.get_login_url(), wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(2000)
+            await page.goto(self.provider_config.get_login_url(), wait_until="domcontentloaded", timeout=45000)
+            await page.wait_for_timeout(3000)  # 从2秒增加到3秒
 
             page_title = await page.title()
             page_content = await page.content()
@@ -694,8 +694,9 @@ class GitHubAuthenticator(Authenticator):
             if not await self._init_page_and_check_cloudflare(page):
                 return {"success": False, "error": "Cloudflare verification timeout"}
 
-            # 第一步：等待额外时间确保 Cloudflare 验证完全通过
-            await page.wait_for_timeout(3000)
+            # 第一步：等待额外时间确保 Cloudflare 验证完全通过 (从3秒增加到5秒)
+            logger.info(f"⏳ [{self.auth_config.username}] 等待Cloudflare验证完全通过...")
+            await page.wait_for_timeout(5000)
             
             # 第二步：获取通过 Cloudflare 验证后的 cookies
             logger.info(f"🔑 [{self.auth_config.username}] 获取初始cookies...")
@@ -712,8 +713,9 @@ class GitHubAuthenticator(Authenticator):
                 try:
                     status_url = self.provider_config.get_status_url()
                     logger.info(f"🌐 [{self.auth_config.username}] 浏览器访问: {status_url}")
-                    await page.goto(status_url, wait_until="domcontentloaded", timeout=30000)
-                    await page.wait_for_timeout(3000)
+                    await page.goto(status_url, wait_until="domcontentloaded", timeout=45000)  # 增加到45秒
+                    # 增加等待时间以确保Cloudflare验证完成 (从3秒增加到5秒)
+                    await page.wait_for_timeout(5000)
                     
                     # 重新获取 cookies
                     retry_cookies = await context.cookies()
@@ -1046,8 +1048,9 @@ class LinuxDoAuthenticator(Authenticator):
             if not await self._init_page_and_check_cloudflare(page):
                 return {"success": False, "error": "Cloudflare verification timeout"}
 
-            # 第一步：等待额外时间确保 Cloudflare 验证完全通过
-            await page.wait_for_timeout(3000)
+            # 第一步：等待额外时间确保 Cloudflare 验证完全通过 (从3秒增加到5秒)
+            logger.info(f"⏳ [{self.auth_config.username}] 等待Cloudflare验证完全通过...")
+            await page.wait_for_timeout(5000)
             
             # 第二步：获取通过 Cloudflare 验证后的 cookies
             logger.info(f"🔑 [{self.auth_config.username}] 获取初始cookies...")
@@ -1064,8 +1067,9 @@ class LinuxDoAuthenticator(Authenticator):
                 try:
                     status_url = self.provider_config.get_status_url()
                     logger.info(f"🌐 [{self.auth_config.username}] 浏览器访问: {status_url}")
-                    await page.goto(status_url, wait_until="domcontentloaded", timeout=30000)
-                    await page.wait_for_timeout(3000)
+                    await page.goto(status_url, wait_until="domcontentloaded", timeout=45000)  # 增加到45秒
+                    # 增加等待时间以确保Cloudflare验证完成 (从3秒增加到5秒)
+                    await page.wait_for_timeout(5000)
                     
                     # 重新获取 cookies
                     retry_cookies = await context.cookies()
@@ -1130,9 +1134,9 @@ class LinuxDoAuthenticator(Authenticator):
                         await login_button.click()
                         logger.info(f"✅ [{self.auth_config.username}] 点击登录按钮")
                         
-                        # 增加等待时间，处理可能的验证
+                        # 增加等待时间，处理可能的验证 (从10秒增加到15秒)
                         logger.info(f"⏳ [{self.auth_config.username}] 等待登录完成（可能需要处理验证）...")
-                        await page.wait_for_timeout(10000)
+                        await page.wait_for_timeout(15000)  # 增加到15秒
                         
                         # 检查是否有 Cloudflare 验证或其他挑战
                         current_url_after_login = page.url
@@ -1140,17 +1144,17 @@ class LinuxDoAuthenticator(Authenticator):
                         
                         # 检查是否在 challenge 页面
                         if "/challenge" in current_url_after_login or "challenge" in current_url_after_login.lower():
-                            logger.warning(f"⚠️ [{self.auth_config.username}] 检测到验证挑战（challenge页面），等待60秒...")
+                            logger.warning(f"⚠️ [{self.auth_config.username}] 检测到验证挑战（challenge页面），等待90秒...")
                             try:
-                                # 等待授权按钮出现或者URL变化（表示验证通过）
-                                await page.wait_for_url(lambda url: "/challenge" not in url.lower(), timeout=60000)
+                                # 等待授权按钮出现或者URL变化（表示验证通过）- 从60秒增加到90秒
+                                await page.wait_for_url(lambda url: "/challenge" not in url.lower(), timeout=90000)
                                 logger.info(f"✅ [{self.auth_config.username}] 已离开验证挑战页面")
-                                await page.wait_for_timeout(2000)
+                                await page.wait_for_timeout(3000)  # 增加到3秒
                                 current_url_after_login = page.url
                                 logger.info(f"🔍 [{self.auth_config.username}] 新URL: {current_url_after_login}")
                             except:
-                                logger.error(f"❌ [{self.auth_config.username}] 验证挑战超时（60秒）")
-                                return {"success": False, "error": "Challenge verification timeout"}
+                                logger.error(f"❌ [{self.auth_config.username}] 验证挑战超时（90秒）")
+                                return {"success": False, "error": "Challenge verification timeout - may need manual intervention"}
                         
                         # 检查是否仍在登录页面
                         if "/login" in current_url_after_login:
@@ -1219,12 +1223,13 @@ class LinuxDoAuthenticator(Authenticator):
                 if "/login" in current_check_url:
                     logger.info(f"ℹ️ [{self.auth_config.username}] 当前在登录页面，尝试查找授权按钮...")
                     try:
-                        # 等待最多5秒看是否出现授权按钮
-                        await page.wait_for_selector('a[href^="/oauth2/approve"]', timeout=5000)
+                        # 等待最多10秒看是否出现授权按钮 (从5秒增加到10秒)
+                        await page.wait_for_selector('a[href^="/oauth2/approve"]', timeout=10000)
                         logger.info(f"✅ [{self.auth_config.username}] 找到授权按钮，登录应该成功了")
                     except:
-                        # 5秒后还没有授权按钮，说明登录确实失败了
+                        # 10秒后还没有授权按钮，说明登录确实失败了
                         logger.error(f"❌ [{self.auth_config.username}] 仍在登录页面且未找到授权按钮，登录失败")
+                        logger.error(f"💡 [{self.auth_config.username}] 可能原因：凭据错误、需要验证码、或网站需要人工验证")
                         
                         # 尝试获取页面内容用于调试
                         try:
