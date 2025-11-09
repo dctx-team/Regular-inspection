@@ -11,6 +11,7 @@ import re
 from utils.config import AuthConfig, ProviderConfig
 from utils.logger import setup_logger
 from utils.sanitizer import sanitize_exception
+from utils.session_cache import SessionCache
 from utils.constants import (
     DEFAULT_USER_AGENT,
     KEY_COOKIE_NAMES,
@@ -24,6 +25,9 @@ from utils.constants import (
 
 # 模块级logger
 logger = setup_logger(__name__)
+
+# 会话缓存实例
+session_cache = SessionCache()
 
 
 class Authenticator(ABC):
@@ -691,6 +695,34 @@ class GitHubAuthenticator(Authenticator):
         try:
             logger.info(f"ℹ️ Starting GitHub authentication")
 
+            # 尝试加载缓存的会话
+            cache_data = session_cache.load(self.auth_config.name, self.provider_config.name)
+            if cache_data:
+                logger.info(f"🔄 [{self.auth_config.username}] 尝试使用缓存的会话...")
+                try:
+                    # 恢复cookies
+                    cached_cookies = cache_data.get("cookies", [])
+                    if cached_cookies:
+                        await context.add_cookies(cached_cookies)
+                        logger.info(f"✅ [{self.auth_config.username}] 已恢复 {len(cached_cookies)} 个缓存cookies")
+                        
+                        # 直接检查会话是否有效
+                        cookies_dict = {cookie["name"]: cookie["value"] for cookie in cached_cookies}
+                        user_id = cache_data.get("user_id")
+                        username = cache_data.get("username")
+                        
+                        if user_id:
+                            logger.info(f"✅ [{self.auth_config.username}] 缓存会话有效，跳过登录")
+                            return {
+                                "success": True,
+                                "cookies": cookies_dict,
+                                "user_id": user_id,
+                                "username": username
+                            }
+                except Exception as e:
+                    logger.warning(f"⚠️ [{self.auth_config.username}] 缓存会话恢复失败: {e}")
+                    logger.info(f"ℹ️ [{self.auth_config.username}] 将执行新的登录流程")
+
             if not await self._init_page_and_check_cloudflare(page):
                 return {"success": False, "error": "Cloudflare verification timeout"}
 
@@ -816,6 +848,20 @@ class GitHubAuthenticator(Authenticator):
             if not user_id:
                 logger.info(f"ℹ️ [{self.auth_config.username}] localStorage未获取到用户ID，尝试API")
                 user_id, username = await self._extract_user_info(page, cookies_dict)
+
+            # 保存会话缓存
+            try:
+                session_cache.save(
+                    account_name=self.auth_config.name,
+                    provider=self.provider_config.name,
+                    cookies=final_cookies,
+                    user_id=user_id,
+                    username=username,
+                    expiry_hours=24
+                )
+                logger.info(f"✅ [{self.auth_config.username}] 会话已缓存（24小时有效）")
+            except Exception as cache_error:
+                logger.warning(f"⚠️ [{self.auth_config.username}] 缓存保存失败: {cache_error}")
 
             return {"success": True, "cookies": cookies_dict, "user_id": user_id, "username": username}
 
@@ -1044,6 +1090,34 @@ class LinuxDoAuthenticator(Authenticator):
         """使用 Linux.do 登录"""
         try:
             logger.info(f"ℹ️ Starting Linux.do authentication")
+
+            # 尝试加载缓存的会话
+            cache_data = session_cache.load(self.auth_config.name, self.provider_config.name)
+            if cache_data:
+                logger.info(f"🔄 [{self.auth_config.username}] 尝试使用缓存的会话...")
+                try:
+                    # 恢复cookies
+                    cached_cookies = cache_data.get("cookies", [])
+                    if cached_cookies:
+                        await context.add_cookies(cached_cookies)
+                        logger.info(f"✅ [{self.auth_config.username}] 已恢复 {len(cached_cookies)} 个缓存cookies")
+                        
+                        # 直接检查会话是否有效
+                        cookies_dict = {cookie["name"]: cookie["value"] for cookie in cached_cookies}
+                        user_id = cache_data.get("user_id")
+                        username = cache_data.get("username")
+                        
+                        if user_id:
+                            logger.info(f"✅ [{self.auth_config.username}] 缓存会话有效，跳过登录")
+                            return {
+                                "success": True,
+                                "cookies": cookies_dict,
+                                "user_id": user_id,
+                                "username": username
+                            }
+                except Exception as e:
+                    logger.warning(f"⚠️ [{self.auth_config.username}] 缓存会话恢复失败: {e}")
+                    logger.info(f"ℹ️ [{self.auth_config.username}] 将执行新的登录流程")
 
             if not await self._init_page_and_check_cloudflare(page):
                 return {"success": False, "error": "Cloudflare verification timeout"}
@@ -1305,6 +1379,20 @@ class LinuxDoAuthenticator(Authenticator):
             if not user_id:
                 logger.info(f"ℹ️ [{self.auth_config.username}] localStorage未获取到用户ID，尝试API")
                 user_id, username = await self._extract_user_info(page, cookies_dict)
+
+            # 保存会话缓存
+            try:
+                session_cache.save(
+                    account_name=self.auth_config.name,
+                    provider=self.provider_config.name,
+                    cookies=final_cookies,
+                    user_id=user_id,
+                    username=username,
+                    expiry_hours=24
+                )
+                logger.info(f"✅ [{self.auth_config.username}] 会话已缓存（24小时有效）")
+            except Exception as cache_error:
+                logger.warning(f"⚠️ [{self.auth_config.username}] 缓存保存失败: {cache_error}")
 
             return {"success": True, "cookies": cookies_dict, "user_id": user_id, "username": username}
 
