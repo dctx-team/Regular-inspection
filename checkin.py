@@ -153,10 +153,14 @@ class CheckIn:
             page = await context.new_page()
 
             try:
-                # 步骤 1: 获取 WAF cookies
-                waf_cookies = await self._get_waf_cookies(page, context)
-                if not waf_cookies:
-                    self.logger.warning(f"⚠️ [{self.account.name}] 未获取到 WAF cookies，继续尝试")
+                # 步骤 1: 对于 AgentRouter 跳过 WAF cookies
+                waf_cookies = {}
+                if self.provider.name.lower() != "agentrouter":
+                    waf_cookies = await self._get_waf_cookies(page, context)
+                    if not waf_cookies:
+                        self.logger.warning(f"⚠️ [{self.account.name}] 未获取到 WAF cookies，继续尝试")
+                else:
+                    self.logger.info(f"ℹ️ [{self.account.name}] AgentRouter 不需要 WAF cookies，跳过")
 
                 # 步骤 2: 执行认证
                 authenticator = get_authenticator(auth_config, self.provider)
@@ -180,30 +184,51 @@ class CheckIn:
                 else:
                     self.logger.info(f"✅ [{self.account.name}] 认证成功，获取到 cookies")
 
-                # 步骤 3: 执行签到
-                checkin_result = await self._do_checkin(auth_cookies, auth_config)
-                if not checkin_result["success"]:
-                    return False, {"error": checkin_result.get("message", "Check-in failed")}
+                # 步骤 3: 执行签到（AgentRouter通过查询用户信息完成）
+                if self.provider.name.lower() == "agentrouter":
+                    # AgentRouter: 查询用户信息即可完成签到
+                    self.logger.info(f"ℹ️ [{self.account.name}] AgentRouter 通过查询用户信息自动签到")
+                    user_info = await self._get_user_info(auth_cookies, auth_config)
+                    if user_info and user_info.get("success"):
+                        # 计算余额变化
+                        balance_change = self._calculate_balance_change(
+                            self.account.name,
+                            auth_config.method,
+                            user_info
+                        )
+                        user_info["balance_change"] = balance_change
 
-                self.logger.info(f"✅ [{self.account.name}] 签到成功: {checkin_result.get('message', '')}")
+                        # 保存余额数据
+                        self._save_balance_data(self.account.name, auth_config.method, user_info)
 
-                # 步骤 4: 获取用户信息和余额
-                user_info = await self._get_user_info(auth_cookies, auth_config)
-                if user_info and user_info.get("success"):
-                    # 计算余额变化
-                    balance_change = self._calculate_balance_change(
-                        self.account.name,
-                        auth_config.method,
-                        user_info
-                    )
-                    user_info["balance_change"] = balance_change
-
-                    # 保存余额数据
-                    self._save_balance_data(self.account.name, auth_config.method, user_info)
-
-                    return True, user_info
+                        return True, user_info
+                    else:
+                        return False, {"error": "Failed to get user info for AgentRouter"}
                 else:
-                    return True, {"success": True, "message": "Check-in successful but failed to get user info"}
+                    # AnyRouter: 需要显式调用签到接口
+                    checkin_result = await self._do_checkin(auth_cookies, auth_config)
+                    if not checkin_result["success"]:
+                        return False, {"error": checkin_result.get("message", "Check-in failed")}
+
+                    self.logger.info(f"✅ [{self.account.name}] 签到成功: {checkin_result.get('message', '')}")
+
+                    # 步骤 4: 获取用户信息和余额
+                    user_info = await self._get_user_info(auth_cookies, auth_config)
+                    if user_info and user_info.get("success"):
+                        # 计算余额变化
+                        balance_change = self._calculate_balance_change(
+                            self.account.name,
+                            auth_config.method,
+                            user_info
+                        )
+                        user_info["balance_change"] = balance_change
+
+                        # 保存余额数据
+                        self._save_balance_data(self.account.name, auth_config.method, user_info)
+
+                        return True, user_info
+                    else:
+                        return True, {"success": True, "message": "Check-in successful but failed to get user info"}
 
             except (asyncio.TimeoutError, Exception) as e:
                 self.logger.error(f"❌ [{self.account.name}] 签到过程异常: {type(e).__name__}: {str(e)}")
