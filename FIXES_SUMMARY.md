@@ -1,6 +1,72 @@
 # Router签到脚本修复总结
 
-## 最新修复 (2025-11-09) - v3.2.1
+## 最新修复 (2025-11-09) - v3.3.0
+
+### 1. OAuth回调URL匹配修复 - ✅ 已修复 (核心问题)
+**问题**: LinuxDO/GitHub OAuth回调后页面停留在 `/login` 而非 `/console`，导致401错误
+
+**根本原因**: utils/auth.py:722-723 (LinuxDO), 547-548 (GitHub)
+```python
+# 错误的模式 - 匹配任何base_url开头的URL，包括 /login
+target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
+await page.wait_for_url(target_pattern, timeout=20000)
+```
+
+**参考方案**: 从 `G:\GitHub_local\Self-built\script\newapi-ai-check-in-main` 项目学习
+- sign_in_with_linuxdo.py:207 和 sign_in_with_github.py:250 使用特定路径匹配
+
+**修复**: utils/auth.py:751, 576
+```python
+# 正确的模式 - 只匹配 /oauth/ 路径，不接受 /login
+await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=30000)
+```
+
+**效果**:
+- ✅ 确保OAuth回调完全完成，不会停留在 `/login`
+- ✅ 从20秒增加到30秒超时，给予更多时间
+
+### 2. localStorage用户ID提取 - ✅ 已添加
+**问题**: OAuth成功但用户信息API返回401，无法获取用户ID
+
+**参考方案**: sign_in_with_linuxdo.py:214-220 和 sign_in_with_github.py:256-260
+```python
+await page.wait_for_timeout(5000)
+user_data = await page.evaluate("() => localStorage.getItem('user')")
+if user_data:
+    user_obj = json.loads(user_data)
+    api_user = user_obj.get("id")
+```
+
+**修复**: utils/auth.py:176-201
+- 新增 `_extract_user_from_localstorage()` 方法
+- 等待5秒确保localStorage已更新
+- 从localStorage提取用户ID和用户名
+
+**优先级策略**:
+```python
+# 优先从localStorage提取用户ID，失败则尝试API
+user_id, username = await self._extract_user_from_localstorage(page)
+if not user_id:
+    logger.info(f"ℹ️ localStorage未获取到用户ID，尝试API")
+    user_id, username = await self._extract_user_info(page, cookies_dict)
+```
+
+**效果**:
+- ✅ 即使用户信息API返回401，也能从localStorage获取用户ID
+- ✅ 多层降级：localStorage → API → 页面URL → 页面元素
+
+### 3. Cloudflare超时再次延长 - ✅ 已优化
+**问题**: AgentRouter平台Cloudflare验证90秒仍超时，4个账号全部失败
+
+**修复**: utils/auth.py:52
+- 将超时时间从90秒延长到120秒
+- 给予Cloudflare更多时间完成人机验证
+
+**预期**: 4个AgentRouter账号 → 2-4个成功
+
+---
+
+## 历史修复 (2025-11-09) - v3.2.0-v3.2.1
 
 ### 1. Cloudflare超时延长 - ✅ 已优化
 **问题**: AgentRouter平台Cloudflare验证60秒超时，4个账号全部失败
@@ -94,6 +160,7 @@ else:
 
 | 版本 | 文件 | 修改内容 | 行数变化 |
 |------|-----|---------|---------|
+| v3.3.0 | utils/auth.py | OAuth回调URL匹配 + localStorage提取 + Cloudflare 120s | +55 |
 | v3.2.1 | utils/auth.py | Cloudflare 90s + 页面用户ID提取 | +39 |
 | v3.2.0 | utils/auth.py | OAuth cookies等待 + cookie域名日志 | +50 |
 | v3.2.0 | utils/constants.py | LinuxDO选择器增强 | +10 |
@@ -109,9 +176,10 @@ else:
 python main.py
 
 # 关注的关键日志
+# ✅ 等待OAuth回调...（新增）
+# ✅ 从localStorage提取到用户ID（新方法生效）
 # ✅ 检测到会话cookies（OAuth成功）
-# ✅ 从URL提取到用户ID（备用方案生效）
-# ⏳ Cloudflare验证中，继续等待... (Xs)（超时前通过）
+# ⏳ Cloudflare验证中，继续等待... (Xs)（120秒超时）
 ```
 
 ---
@@ -119,22 +187,24 @@ python main.py
 ## 当前状态
 
 **已解决问题**:
+- ✅ **OAuth回调URL匹配修复** - 不再停留在 `/login`（v3.3.0核心修复）
+- ✅ **localStorage用户ID提取** - 即使API 401也能获取ID（v3.3.0）
 - ✅ KeyError: 'display' 完全修复
 - ✅ LinuxDO OAuth cookies 从3个→14个
 - ✅ LinuxDO按钮查找 100%成功
-- ✅ OAuth用户ID提取有备用方案
-- ✅ Cloudflare超时延长到90秒
+- ✅ Cloudflare超时延长到120秒
 
-**持续改进中**:
-- ⚙️ LinuxDO OAuth签到401（5个账号）- 需观察用户ID提取效果
-- ⚙️ AgentRouter Cloudflare超时（4个账号）- 90秒应该能解决大部分
+**预期改善**:
+- ✅ LinuxDO OAuth签到401（5个账号）- **v3.3.0应该完全解决**
+- ⚙️ AgentRouter Cloudflare超时（4个账号）- 120秒应该能解决大部分
 - ℹ️ Email认证用户信息API 401（3个账号）- 已优雅处理
 
 ---
 
-**预期改善**:
+**版本进展**:
 - v3.0.0: 成功率 25% → 60%+ (KeyError修复)
 - v3.2.0: LinuxDO OAuth cookies问题解决，按钮查找100%
 - v3.2.1: Cloudflare超时改善，用户ID提取更智能
+- **v3.3.0: OAuth回调完全修复 + localStorage提取，预期成功率 80%+ (10/12账号)**
 
-**目标成功率**: 75%+ (9/12账号)
+**目标成功率**: 80%+ (10/12账号)

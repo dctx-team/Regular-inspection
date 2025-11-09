@@ -49,7 +49,7 @@ class Authenticator(ABC):
         """
         pass
 
-    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 90) -> bool:
+    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 120) -> bool:
         """等待Cloudflare验证完成"""
         try:
             logger.info(f"🛡️ 检测到可能的Cloudflare验证，等待完成...")
@@ -170,6 +170,33 @@ class Authenticator(ABC):
             logger.warning(f"⚠️ 无法从页面提取用户信息")
         except Exception as e:
             logger.warning(f"⚠️ 从页面提取用户信息异常: {e}")
+
+        return None, None
+
+    async def _extract_user_from_localstorage(self, page: Page) -> Tuple[Optional[str], Optional[str]]:
+        """从localStorage提取用户标识"""
+        try:
+            logger.info(f"🔍 尝试从localStorage提取用户信息")
+
+            # 等待5秒，确保localStorage已更新
+            await page.wait_for_timeout(5000)
+
+            user_data = await page.evaluate("() => localStorage.getItem('user')")
+            if user_data:
+                import json
+                user_obj = json.loads(user_data)
+                user_id = user_obj.get("id")
+                username = user_obj.get("username") or user_obj.get("name") or user_obj.get("email")
+
+                if user_id:
+                    logger.info(f"✅ 从localStorage提取到用户ID: {user_id}")
+                    return str(user_id), username
+                else:
+                    logger.warning(f"⚠️ localStorage中未找到用户ID")
+            else:
+                logger.warning(f"⚠️ localStorage中未找到用户数据")
+        except Exception as e:
+            logger.warning(f"⚠️ 从localStorage提取用户信息异常: {e}")
 
         return None, None
 
@@ -544,8 +571,9 @@ class GitHubAuthenticator(Authenticator):
                     await authorize_button.click()
                     await page.wait_for_load_state("networkidle", timeout=10000)
 
-            target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
-            await page.wait_for_url(target_pattern, timeout=20000)
+            # 等待OAuth回调到 /oauth/ 路径
+            logger.info(f"⏳ [{self.auth_config.username}] 等待OAuth回调...")
+            await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=30000)
 
             # 等待cookies传播完成
             logger.info(f"🔄 [{self.auth_config.username}] OAuth回调完成，等待cookies设置...")
@@ -556,7 +584,12 @@ class GitHubAuthenticator(Authenticator):
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
 
             self._log_cookies_info(cookies_dict, final_cookies, "GitHub")
-            user_id, username = await self._extract_user_info(page, cookies_dict)
+
+            # 优先从localStorage提取用户ID，失败则尝试API
+            user_id, username = await self._extract_user_from_localstorage(page)
+            if not user_id:
+                logger.info(f"ℹ️ [{self.auth_config.username}] localStorage未获取到用户ID，尝试API")
+                user_id, username = await self._extract_user_info(page, cookies_dict)
 
             return {"success": True, "cookies": cookies_dict, "user_id": user_id, "username": username}
 
@@ -719,8 +752,9 @@ class LinuxDoAuthenticator(Authenticator):
                         await login_button.click()
                         await page.wait_for_load_state("networkidle", timeout=15000)
 
-            target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
-            await page.wait_for_url(target_pattern, timeout=20000)
+            # 等待OAuth回调到 /oauth/ 路径（避免停留在 /login）
+            logger.info(f"⏳ [{self.auth_config.username}] 等待OAuth回调...")
+            await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=30000)
 
             # 等待cookies传播完成
             logger.info(f"🔄 [{self.auth_config.username}] OAuth回调完成，等待cookies设置...")
@@ -731,7 +765,12 @@ class LinuxDoAuthenticator(Authenticator):
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
 
             self._log_cookies_info(cookies_dict, final_cookies, "LinuxDO")
-            user_id, username = await self._extract_user_info(page, cookies_dict)
+
+            # 优先从localStorage提取用户ID，失败则尝试API
+            user_id, username = await self._extract_user_from_localstorage(page)
+            if not user_id:
+                logger.info(f"ℹ️ [{self.auth_config.username}] localStorage未获取到用户ID，尝试API")
+                user_id, username = await self._extract_user_info(page, cookies_dict)
 
             return {"success": True, "cookies": cookies_dict, "user_id": user_id, "username": username}
 
