@@ -49,7 +49,7 @@ class Authenticator(ABC):
         """
         pass
 
-    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 60) -> bool:
+    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 90) -> bool:
         """等待Cloudflare验证完成"""
         try:
             logger.info(f"🛡️ 检测到可能的Cloudflare验证，等待完成...")
@@ -132,8 +132,45 @@ class Authenticator(ABC):
                         if user_id or username:
                             logger.info(f"✅ 提取到用户标识: ID={user_id}, 用户名={username}")
                             return str(user_id) if user_id else None, username
+                else:
+                    logger.warning(f"⚠️ 用户信息API返回 {response.status_code}，尝试从页面提取")
+                    # 当API返回401时，尝试从当前页面URL提取user_id
+                    return await self._extract_user_from_page(page)
         except Exception as e:
-            logger.warning(f"⚠️ 提取用户信息失败: {e}")
+            logger.warning(f"⚠️ 提取用户信息失败: {e}，尝试从页面提取")
+            return await self._extract_user_from_page(page)
+        return None, None
+
+    async def _extract_user_from_page(self, page: Page) -> Tuple[Optional[str], Optional[str]]:
+        """从页面URL或内容提取用户标识"""
+        try:
+            current_url = page.url
+            logger.info(f"🔍 尝试从页面提取用户信息: {current_url}")
+
+            # 尝试从URL路径提取（如 /user/12345）
+            import re
+            user_match = re.search(r'/user/(\w+)', current_url)
+            if user_match:
+                user_id = user_match.group(1)
+                logger.info(f"✅ 从URL提取到用户ID: {user_id}")
+                return user_id, None
+
+            # 尝试查找页面中的用户信息
+            try:
+                # 查找可能包含用户ID的元素
+                user_elements = await page.query_selector_all('[data-user-id], [data-userid], [id*="user"]')
+                for elem in user_elements[:5]:
+                    user_id = await elem.get_attribute('data-user-id') or await elem.get_attribute('data-userid')
+                    if user_id and user_id.isdigit():
+                        logger.info(f"✅ 从页面元素提取到用户ID: {user_id}")
+                        return user_id, None
+            except:
+                pass
+
+            logger.warning(f"⚠️ 无法从页面提取用户信息")
+        except Exception as e:
+            logger.warning(f"⚠️ 从页面提取用户信息异常: {e}")
+
         return None, None
 
     async def _init_page_and_check_cloudflare(self, page: Page) -> bool:
