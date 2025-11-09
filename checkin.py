@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import tempfile
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Tuple, Optional
 from functools import wraps
 
@@ -66,7 +67,6 @@ class CheckIn:
         self.balance_data_file = "balance_data.json"
         self.logger = setup_logger(__name__)
         self._playwright = None
-        self._browser = None
 
     async def __aenter__(self):
         """进入上下文时初始化浏览器"""
@@ -76,12 +76,6 @@ class CheckIn:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """退出上下文时清理浏览器资源"""
-        if self._browser:
-            try:
-                await self._browser.close()
-                self.logger.info(f"🔒 [{self.account.name}] 浏览器实例已关闭")
-            except Exception as e:
-                self.logger.warning(f"⚠️ [{self.account.name}] 关闭浏览器时出现警告: {e}")
         if self._playwright:
             try:
                 await self._playwright.stop()
@@ -316,14 +310,17 @@ class CheckIn:
         if 'set-cookie' in response_headers:
             self.logger.info(f"🍪 [{self.account.name}] 响应包含新cookies: {response_headers['set-cookie'][:100]}...")
 
-        if response.status_code == 200:
-            return await self._handle_200_response(response)
-        elif response.status_code == 401:
-            return await self._handle_401_response(client)
-        elif response.status_code == 403:
-            return self._handle_403_response()
-        elif response.status_code == 404:
-            return await self._handle_404_response(client, headers)
+        # 使用策略模式处理不同状态码
+        checkin_handlers = {
+            200: lambda: self._handle_200_response(response),
+            401: lambda: self._handle_401_response(client),
+            403: lambda: self._handle_403_response(),
+            404: lambda: self._handle_404_response(client, headers),
+        }
+
+        handler = checkin_handlers.get(response.status_code)
+        if handler:
+            return await handler()
         else:
             return self._handle_other_response(response)
 
@@ -454,15 +451,20 @@ class CheckIn:
         """解析用户信息响应数据"""
         if data.get("success") and data.get("data"):
             user_data = data["data"]
-            quota = user_data.get("quota", 0) / QUOTA_TO_DOLLAR_RATE  # 转换为美元
-            used_quota = user_data.get("used_quota", 0) / QUOTA_TO_DOLLAR_RATE
+            # 使用Decimal进行精确货币计算
+            quota = Decimal(str(user_data.get("quota", 0))) / Decimal(str(QUOTA_TO_DOLLAR_RATE))
+            used_quota = Decimal(str(user_data.get("used_quota", 0))) / Decimal(str(QUOTA_TO_DOLLAR_RATE))
+
+            # 四舍五入到2位小数
+            quota_rounded = float(quota.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            used_rounded = float(used_quota.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
             self.logger.info(f"✅ [{self.account.name}] 用户信息获取成功!")
             return {
                 "success": True,
-                "quota": round(quota, 2),
-                "used": round(used_quota, 2),
-                "display": f"余额: ${quota:.2f}, 已用: ${used_quota:.2f}"
+                "quota": quota_rounded,
+                "used": used_rounded,
+                "display": f"余额: ${quota_rounded:.2f}, 已用: ${used_rounded:.2f}"
             }
         else:
             error_msg = data.get("message", "未知错误")
@@ -473,6 +475,7 @@ class CheckIn:
         """处理用户信息响应"""
         self.logger.info(f"📊 [{self.account.name}] 用户信息响应: HTTP {response.status_code}")
 
+        # 使用策略模式处理不同状态码
         if response.status_code == 200:
             try:
                 data = response.json()
@@ -483,12 +486,19 @@ class CheckIn:
                 self.logger.info(f"📄 [{self.account.name}] 原始响应: {response.text[:200]}...")
                 return None
 
-        elif response.status_code == 401:
-            self.logger.error(f"❌ [{self.account.name}] 认证失败 (401)")
-        elif response.status_code == 403:
-            self.logger.error(f"❌ [{self.account.name}] 访问被禁止 (403)")
-        elif response.status_code == 404:
-            self.logger.warning(f"⚠️ [{self.account.name}] 用户信息接口不存在 (404)")
+        # 处理错误状态码
+        error_messages = {
+            401: "认证失败 (401)",
+            403: "访问被禁止 (403)",
+            404: "用户信息接口不存在 (404)",
+        }
+
+        error_msg = error_messages.get(response.status_code)
+        if error_msg:
+            if response.status_code == 404:
+                self.logger.warning(f"⚠️ [{self.account.name}] {error_msg}")
+            else:
+                self.logger.error(f"❌ [{self.account.name}] {error_msg}")
         else:
             self.logger.error(f"❌ [{self.account.name}] HTTP错误: {response.status_code}")
             self.logger.info(f"📄 [{self.account.name}] 响应内容: {response.text[:100]}...")
@@ -543,20 +553,22 @@ class CheckIn:
                 key = f"{account_name}_{auth_method}"
                 if key in history_data:
                     old_info = history_data[key]
-                    old_quota = old_info.get("quota", 0)
-                    old_used = old_info.get("used", 0)
 
-                    current_quota = current_info.get("quota", 0)
-                    current_used = current_info.get("used", 0)
+                    # 使用Decimal进行精确计算
+                    old_quota = Decimal(str(old_info.get("quota", 0)))
+                    old_used = Decimal(str(old_info.get("used", 0)))
+                    current_quota = Decimal(str(current_info.get("quota", 0)))
+                    current_used = Decimal(str(current_info.get("used", 0)))
 
                     # 计算变化
                     total_change = (current_quota + current_used) - (old_quota + old_used)
                     used_change = current_used - old_used
                     quota_change = current_quota - old_quota
 
-                    change["recharge"] = round(total_change, 2)
-                    change["used_change"] = round(used_change, 2)
-                    change["quota_change"] = round(quota_change, 2)
+                    # 四舍五入到2位小数并转换为float
+                    change["recharge"] = float(total_change.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+                    change["used_change"] = float(used_change.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+                    change["quota_change"] = float(quota_change.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
         except (IOError, OSError, json.JSONDecodeError, KeyError, ValueError) as e:
             self.logger.warning(f"⚠️ 计算余额变化失败: {str(e)}")

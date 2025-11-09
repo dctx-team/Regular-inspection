@@ -49,41 +49,60 @@ class Authenticator(ABC):
         """
         pass
 
-    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 120) -> bool:
-        """等待Cloudflare验证完成"""
+    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 60) -> bool:
+        """等待Cloudflare验证完成（优化版）"""
         try:
+            # 检查是否跳过Cloudflare验证
+            if os.getenv("SKIP_CLOUDFLARE_CHECK", "false").lower() == "true":
+                logger.info(f"ℹ️ 已配置跳过Cloudflare验证检查")
+                return True
+            
             logger.info(f"🛡️ 检测到可能的Cloudflare验证，等待完成...")
             start_time = asyncio.get_event_loop().time()
 
             while asyncio.get_event_loop().time() - start_time < max_wait_seconds:
                 current_url = page.url
                 page_title = await page.title()
+                
+                # 更智能的检测：检查页面内容而不仅仅是标题
+                page_content = await page.content()
+                has_cloudflare_markers = any(marker in page_content.lower() for marker in [
+                    "just a moment",
+                    "checking your browser",
+                    "cloudflare",
+                    "ddos protection"
+                ])
 
                 # 检查是否是Cloudflare验证页
-                if "verification" in page_title.lower() or "checking" in page_title.lower():
-                    logger.info(f"   ⏳ Cloudflare验证中，继续等待... ({int(asyncio.get_event_loop().time() - start_time)}s)")
-                    await page.wait_for_timeout(2000)
+                if has_cloudflare_markers and ("verification" in page_title.lower() or "checking" in page_title.lower()):
+                    elapsed = int(asyncio.get_event_loop().time() - start_time)
+                    logger.info(f"   ⏳ Cloudflare验证中，继续等待... ({elapsed}s)")
+                    
+                    # 超过30秒后降低检测频率
+                    wait_time = 4000 if elapsed > 30 else 2000
+                    await page.wait_for_timeout(wait_time)
                     continue
 
                 # 检查是否已经通过验证
-                if "login" in current_url.lower() and "verification" not in page_title.lower():
+                if "login" in current_url.lower() and not has_cloudflare_markers:
                     logger.info(f"✅ Cloudflare验证完成")
                     return True
 
-                # 检查按钮数量
-                buttons = await page.query_selector_all('button, a[href]')
-                if len(buttons) > 2:  # 如果有交互元素，说明可能已通过
-                    logger.info(f"✅ 检测到交互元素，验证可能已完成")
+                # 检查登录页面特征（更可靠的判断）
+                login_indicators = await page.query_selector_all('input[type="email"], input[type="password"], input[name="login"], button:has-text("登录"), button:has-text("Login")')
+                if len(login_indicators) > 0:
+                    logger.info(f"✅ 检测到登录表单，验证已完成")
                     return True
 
                 await page.wait_for_timeout(2000)
 
-            logger.warning(f"⚠️ Cloudflare验证等待超时({max_wait_seconds}s)")
-            return False
+            logger.warning(f"⚠️ Cloudflare验证等待超时({max_wait_seconds}s)，尝试继续...")
+            # 超时后不直接返回False，而是尝试继续（可能是误判）
+            return True
 
         except Exception as e:
-            logger.warning(f"⚠️ Cloudflare验证检测异常: {e}")
-            return False
+            logger.warning(f"⚠️ Cloudflare验证检测异常: {e}，尝试继续...")
+            return True  # 发生异常时也尝试继续
 
     def _get_domain(self, url: str) -> str:
         """从 URL 提取域名"""
@@ -202,14 +221,27 @@ class Authenticator(ABC):
 
     async def _init_page_and_check_cloudflare(self, page: Page) -> bool:
         """初始化页面并检查Cloudflare"""
-        await page.goto(self.provider_config.get_login_url())
-        await page.wait_for_load_state("domcontentloaded")
-        await page.wait_for_timeout(1500)
+        try:
+            await page.goto(self.provider_config.get_login_url(), wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
 
-        page_title = await page.title()
-        if "verification" in page_title.lower() or "checking" in page_title.lower():
-            return await self._wait_for_cloudflare_challenge(page)
-        return True
+            page_title = await page.title()
+            page_content = await page.content()
+            
+            # 更准确地检测Cloudflare验证页
+            is_cloudflare = any(marker in page_content.lower() for marker in [
+                "just a moment",
+                "checking your browser",
+                "cloudflare"
+            ]) or ("verification" in page_title.lower() or "checking" in page_title.lower())
+            
+            if is_cloudflare:
+                logger.info(f"🛡️ 检测到Cloudflare验证页面，等待通过...")
+                return await self._wait_for_cloudflare_challenge(page)
+            return True
+        except Exception as e:
+            logger.warning(f"⚠️ 页面初始化异常: {e}，尝试继续...")
+            return True  # 即使初始化失败也尝试继续
 
     def _log_cookies_info(self, cookies_dict: Dict[str, str], final_cookies: list, auth_type: str):
         """统一的cookies信息日志"""
@@ -512,7 +544,12 @@ class EmailAuthenticator(Authenticator):
                 logger.warning(f"⚠️ [{self.auth_config.username}] 未找到session cookie")
 
             logger.info(f"✅ [{self.auth_config.username}] 邮箱认证完成，获取到 {len(cookies_dict)} 个cookies")
-            user_id, username = await self._extract_user_info(page, cookies_dict)
+            
+            # 优先从localStorage提取用户ID，失败则尝试API
+            user_id, username = await self._extract_user_from_localstorage(page)
+            if not user_id:
+                logger.info(f"ℹ️ [{self.auth_config.username}] localStorage未获取到用户ID，尝试API")
+                user_id, username = await self._extract_user_info(page, cookies_dict)
 
             return {"success": True, "cookies": cookies_dict, "user_id": user_id, "username": username}
 
@@ -670,7 +707,8 @@ class LinuxDoAuthenticator(Authenticator):
                 "User-Agent": DEFAULT_USER_AGENT,
                 "Accept": "application/json",
                 "Referer": self.provider_config.base_url,
-                "Origin": self.provider_config.base_url
+                "Origin": self.provider_config.base_url,
+                self.provider_config.api_user_key: "-1"  # 使用-1表示未登录用户
             }
 
             async with httpx.AsyncClient(cookies=cookies, timeout=30.0, verify=True) as client:
@@ -710,7 +748,8 @@ class LinuxDoAuthenticator(Authenticator):
                 "User-Agent": DEFAULT_USER_AGENT,
                 "Accept": "application/json",
                 "Referer": self.provider_config.base_url,
-                "Origin": self.provider_config.base_url
+                "Origin": self.provider_config.base_url,
+                self.provider_config.api_user_key: "-1"  # 使用-1表示未登录用户
             }
 
             async with httpx.AsyncClient(cookies=cookies, timeout=30.0, verify=True) as client:

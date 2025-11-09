@@ -21,6 +21,7 @@ class ProviderConfig:
     user_info_url: str
     status_url: str = None  # API 状态接口，用于获取 client_id
     auth_state_url: str = None  # OAuth 认证状态接口
+    api_user_key: str = "New-Api-User"  # API User header 键名
 
     def get_login_url(self) -> str:
         """获取登录URL"""
@@ -33,14 +34,14 @@ class ProviderConfig:
     def get_user_info_url(self) -> str:
         """获取用户信息URL"""
         return self.user_info_url
-
+    
     def get_status_url(self) -> str:
         """获取状态URL"""
-        return self.status_url or f"{self.base_url}/api/status"
-
+        return self.status_url or f"{self.base_url}/api/user/status"
+    
     def get_auth_state_url(self) -> str:
-        """获取OAuth认证状态URL"""
-        return self.auth_state_url or f"{self.base_url}/api/oauth/state"
+        """获取认证状态URL"""
+        return self.auth_state_url or f"{self.base_url}/api/user/auth_state"
 
 
 @dataclass

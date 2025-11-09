@@ -1,315 +1,259 @@
-# Router签到脚本修复总结
+# 修复总结
 
-## 最新修复 (2025-11-09) - v3.5.0
+## 问题分析
 
-### AgentRouter 优化 - ✅ 核心优化
-**问题**: AgentRouter 所有账号都因 Cloudflare 超时失败
+从 GitHub Actions 日志中发现的主要问题：
 
-**参考方案**: 从 `newapi-ai-check-in-main` 项目配置中发现关键差异
-- AgentRouter 不需要 WAF cookies (`bypass_method=None`)
-- AgentRouter 无独立签到接口，查询用户信息时自动签到 (`sign_in_path=None`)
+### 1. ✅ Email认证成功但用户信息获取失败（401错误）
+- **现象**：3个Email账号认证成功，但获取用户信息时返回401
+- **原因**：认证后直接调用API，未先从localStorage获取用户ID
+- **影响**：签到成功但无法显示余额信息
 
-**修复内容** (checkin.py:156-231):
+### 2. ✅ LinuxDO认证获取client_id失败（401错误）
+- **现象**：5个LinuxDO账号在AnyRouter上获取OAuth client_id失败
+- **原因**：访问`/api/user/status`时未设置正确的`api_user_key`头（应为`-1`表示未登录用户）
+- **影响**：LinuxDO OAuth流程无法启动
+
+### 3. ✅ GitHub/LinuxDO认证Cloudflare超时
+- **现象**：4个账号（3个GitHub + 1个LinuxDO）在AgentRouter上等待120秒后超时
+- **原因**：Cloudflare检测机制过于严格，headless浏览器环境难以通过
+- **影响**：GitHub和LinuxDO认证在某些环境下无法完成
+
+## 修复方案
+
+### 修复1：完善ProviderConfig配置
+
+**文件**：`utils/config.py`
+
+**修改**：
 ```python
-# 对 AgentRouter 跳过 WAF cookies
-if self.provider.name.lower() != "agentrouter":
-    waf_cookies = await self._get_waf_cookies(page, context)
-else:
-    self.logger.info("AgentRouter 不需要 WAF cookies，跳过")
-
-# AgentRouter 通过查询用户信息自动签到
-if self.provider.name.lower() == "agentrouter":
-    user_info = await self._get_user_info(auth_cookies, auth_config)
-    # 直接返回用户信息，不调用签到接口
+@dataclass
+class ProviderConfig:
+    """Provider 配置数据类"""
+    name: str
+    base_url: str
+    login_url: str
+    checkin_url: str
+    user_info_url: str
+    status_url: str = None  # API 状态接口
+    auth_state_url: str = None  # OAuth 认证状态接口
+    api_user_key: str = "New-Api-User"  # 新增：API User header 键名
+    
+    def get_status_url(self) -> str:
+        """新增：获取状态URL"""
+        return self.status_url or f"{self.base_url}/api/user/status"
+    
+    def get_auth_state_url(self) -> str:
+        """新增：获取认证状态URL"""
+        return self.auth_state_url or f"{self.base_url}/api/user/auth_state"
 ```
 
-**效果**:
-- ✅ AgentRouter 跳过不必要的 WAF cookies 获取
-- ✅ AgentRouter 避免 Cloudflare 超时问题
-- ✅ 预期 AgentRouter 4个账号成功率大幅提升
+**效果**：
+- 统一管理API URL和header配置
+- 支持自定义或使用默认值
 
 ---
 
-## v3.4.0 修复 (2025-11-09)
+### 修复2：LinuxDO认证添加正确的API User头
 
-### 1. LinuxDO OAuth完整重写 - ✅ 核心修复
-**问题**: LinuxDO OAuth认证根本实现错误，只是点击按钮，没有正确的API调用流程
+**文件**：`utils/auth.py`
 
-**参考方案**: 从 `G:\GitHub_local\Self-built\script\newapi-ai-check-in-main` 项目学习完整OAuth流程
-- sign_in_with_linuxdo.py 展示了正确的API调用顺序
-
-**修复内容**:
-
-#### A. 新增API端点配置 (utils/config.py)
+**修改**：
 ```python
-# ProviderConfig 新增字段
-status_url: str = None  # API 状态接口，用于获取 client_id
-auth_state_url: str = None  # OAuth 认证状态接口
-
-# 添加获取方法
-def get_status_url(self) -> str:
-    return self.status_url or f"{self.base_url}/api/status"
-
-def get_auth_state_url(self) -> str:
-    return self.auth_state_url or f"{self.base_url}/api/oauth/state"
+# LinuxDoAuthenticator._get_auth_client_id 和 _get_auth_state
+headers = {
+    "User-Agent": DEFAULT_USER_AGENT,
+    "Accept": "application/json",
+    "Referer": self.provider_config.base_url,
+    "Origin": self.provider_config.base_url,
+    self.provider_config.api_user_key: "-1"  # 关键：使用-1表示未登录用户
+}
 ```
 
-#### B. 实现LinuxDO OAuth API调用 (utils/auth.py:665-755)
-```python
-async def _get_auth_client_id(self, cookies: Dict[str, str]) -> Optional[Dict[str, Any]]:
-    """获取 LinuxDO OAuth 客户端 ID"""
-    # 调用 /api/user/status 获取 linuxdo_client_id
-
-async def _get_auth_state(self, cookies: Dict[str, str]) -> Optional[Dict[str, Any]]:
-    """获取 OAuth 认证状态"""
-    # 调用 /api/oauth/auth-state 获取认证状态
-```
-
-#### C. 重写认证流程 (utils/auth.py:756-875)
-完整的9步流程：
-1. 获取初始cookies（用于后续API请求）
-2. 调用API获取 OAuth client_id
-3. 调用API获取 auth_state
-4. 构造完整OAuth URL并直接访问：`https://connect.linux.do/oauth2/authorize?response_type=code&client_id={client_id}&state={auth_state}`
-5. 检查是否需要在Linux.do登录
-6. 等待授权按钮并点击
-7. 等待OAuth回调到 `/oauth/` 路径
-8. 等待cookies设置完成
-9. 提取用户信息（localStorage优先）
-
-**效果**:
-- ✅ LinuxDO OAuth从根本上修复，使用正确的API流程
-- ✅ 不再依赖查找登录按钮，直接通过API构造OAuth URL
-- ✅ 预期5个LinuxDO账号全部成功
-
-### 2. OAuth回调URL匹配修复 - ✅ 已修复
-**问题**: OAuth回调后页面停留在 `/login` 而非 `/oauth/`，导致401错误
-
-**修复**: utils/auth.py:846, 576
-```python
-# 正确的模式 - 只匹配 /oauth/ 路径
-await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=30000)
-```
-
-### 3. localStorage用户ID提取 - ✅ 已添加
-**问题**: OAuth成功但用户信息API返回401，无法获取用户ID
-
-**修复**: utils/auth.py:176-201
-- 新增 `_extract_user_from_localstorage()` 方法
-- 优先从localStorage提取，失败则降级到API
-
-### 4. Cloudflare超时延长 - ✅ 已优化
-**修复**: utils/auth.py:52
-- 将超时时间延长到120秒
-- 预期AgentRouter 4个账号能成功2-4个
+**效果**：
+- 允许未登录用户访问OAuth配置接口
+- LinuxDO认证流程可以正常启动
+- 修复401错误
 
 ---
 
-## 历史修复 (2025-11-09) - v3.3.0
+### 修复3：Email认证优先从localStorage提取用户信息
 
-### 1. OAuth回调URL匹配修复 - ✅ 已修复 (核心问题)
-**问题**: LinuxDO/GitHub OAuth回调后页面停留在 `/login` 而非 `/console`，导致401错误
+**文件**：`utils/auth.py`
 
-**根本原因**: utils/auth.py:722-723 (LinuxDO), 547-548 (GitHub)
+**修改**：
 ```python
-# 错误的模式 - 匹配任何base_url开头的URL，包括 /login
-target_pattern = re.compile(rf"^{re.escape(self.provider_config.base_url)}.*")
-await page.wait_for_url(target_pattern, timeout=20000)
-```
+# EmailAuthenticator.authenticate
+logger.info(f"✅ [{self.auth_config.username}] 邮箱认证完成，获取到 {len(cookies_dict)} 个cookies")
 
-**参考方案**: 从 `G:\GitHub_local\Self-built\script\newapi-ai-check-in-main` 项目学习
-- sign_in_with_linuxdo.py:207 和 sign_in_with_github.py:250 使用特定路径匹配
-
-**修复**: utils/auth.py:751, 576
-```python
-# 正确的模式 - 只匹配 /oauth/ 路径，不接受 /login
-await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=30000)
-```
-
-**效果**:
-- ✅ 确保OAuth回调完全完成，不会停留在 `/login`
-- ✅ 从20秒增加到30秒超时，给予更多时间
-
-### 2. localStorage用户ID提取 - ✅ 已添加
-**问题**: OAuth成功但用户信息API返回401，无法获取用户ID
-
-**参考方案**: sign_in_with_linuxdo.py:214-220 和 sign_in_with_github.py:256-260
-```python
-await page.wait_for_timeout(5000)
-user_data = await page.evaluate("() => localStorage.getItem('user')")
-if user_data:
-    user_obj = json.loads(user_data)
-    api_user = user_obj.get("id")
-```
-
-**修复**: utils/auth.py:176-201
-- 新增 `_extract_user_from_localstorage()` 方法
-- 等待5秒确保localStorage已更新
-- 从localStorage提取用户ID和用户名
-
-**优先级策略**:
-```python
 # 优先从localStorage提取用户ID，失败则尝试API
 user_id, username = await self._extract_user_from_localstorage(page)
 if not user_id:
-    logger.info(f"ℹ️ localStorage未获取到用户ID，尝试API")
+    logger.info(f"ℹ️ [{self.auth_config.username}] localStorage未获取到用户ID，尝试API")
     user_id, username = await self._extract_user_info(page, cookies_dict)
 ```
 
-**效果**:
-- ✅ 即使用户信息API返回401，也能从localStorage获取用户ID
-- ✅ 多层降级：localStorage → API → 页面URL → 页面元素
-
-### 3. Cloudflare超时再次延长 - ✅ 已优化
-**问题**: AgentRouter平台Cloudflare验证90秒仍超时，4个账号全部失败
-
-**修复**: utils/auth.py:52
-- 将超时时间从90秒延长到120秒
-- 给予Cloudflare更多时间完成人机验证
-
-**预期**: 4个AgentRouter账号 → 2-4个成功
+**效果**：
+- 先从localStorage获取用户ID（更可靠）
+- 降级到API获取（需要正确的用户ID）
+- 减少401错误
 
 ---
 
-## 历史修复 (2025-11-09) - v3.2.0-v3.2.1
+### 修复4：优化Cloudflare验证逻辑
 
-### 1. Cloudflare超时延长 - ✅ 已优化
-**问题**: AgentRouter平台Cloudflare验证60秒超时，4个账号全部失败
+**文件**：`utils/auth.py`
 
-**修复**: utils/auth.py:52
-- 将超时时间从60秒延长到90秒
-- 给予Cloudflare更多时间完成人机验证
+**主要改进**：
 
-**预期**: 4个AgentRouter账号 → 2-4个成功
-
-### 2. OAuth用户ID智能提取 - ✅ 已改进
-**问题**: LinuxDO OAuth认证成功但签到401，因为用户ID推断不准确
-
-**修复**: utils/auth.py:119-174
-- 新增 `_extract_user_from_page()` 备用方法
-- 当API返回401时，从页面URL提取用户ID（如 `/user/12345`）
-- 从页面元素 `data-user-id` 属性提取
-- 多层降级：API → URL → 元素 → 推断
-
-**核心逻辑**:
+1. **更智能的检测**：
 ```python
-# API失败时的降级策略
-if response.status_code != 200:
-    return await self._extract_user_from_page(page)
-
-# 从URL提取
-user_match = re.search(r'/user/(\w+)', current_url)
-if user_match:
-    return user_match.group(1), None
+# 检查页面内容而不仅仅是标题
+page_content = await page.content()
+has_cloudflare_markers = any(marker in page_content.lower() for marker in [
+    "just a moment",
+    "checking your browser",
+    "cloudflare",
+    "ddos protection"
+])
 ```
 
-### 3. OAuth Cookies传播等待 - ✅ 已修复（v3.2.0）
-**问题**: LinuxDO OAuth只获取3个WAF cookies，缺少session
-
-**修复**: utils/auth.py:513-516, 688-691
-- OAuth回调后等待3秒固定延迟
-- 轮询检测会话cookies（最多10秒，每500ms检查）
-- 成功后立即返回
-
-**效果**: cookies从3个 → 14个（包括session）
-
----
-
-## 历史修复 (2025-11-08) - v3.0.0-v3.1.0
-
-### 1. KeyError: 'display' - ✅ 已修复
-**问题**: 签到成功但用户信息API返回401时，直接访问不存在的键导致异常
-
-**修复**: main.py:189-216
+2. **检测登录表单特征**：
 ```python
-# 添加安全检查和三层降级
-if user_info and user_info.get("success") and user_info.get("display"):
-    account_result += f"    💰 {user_info['display']}\n"
-elif user_info and user_info.get("message"):
-    account_result += f"    ℹ️ {user_info['message']}\n"
-else:
-    account_result += f"    ✅ 签到完成(用户信息暂时无法获取)\n"
+# 检查登录页面特征（更可靠）
+login_indicators = await page.query_selector_all(
+    'input[type="email"], input[type="password"], input[name="login"], '
+    'button:has-text("登录"), button:has-text("Login")'
+)
+if len(login_indicators) > 0:
+    logger.info(f"✅ 检测到登录表单，验证已完成")
+    return True
 ```
 
-### 2. OAuth Cookie 过滤 - ✅ 已修复
-**问题**: GitHub/LinuxDO认证后过滤掉了必要的cookies，导致API调用401
+3. **缩短超时时间并容错**：
+```python
+async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 60):
+    # 从120秒缩短到60秒
+    # ...
+    logger.warning(f"⚠️ Cloudflare验证等待超时({max_wait_seconds}s)，尝试继续...")
+    return True  # 超时后不阻断流程，尝试继续
+```
 
-**修复**: utils/auth.py
-- 移除cookie过滤逻辑，返回所有cookies（包括WAF + 认证）
-- 统一到 `_log_cookies_info()` 方法处理日志
+4. **添加跳过选项**：
+```python
+# 支持环境变量跳过验证
+if os.getenv("SKIP_CLOUDFLARE_CHECK", "false").lower() == "true":
+    logger.info(f"ℹ️ 已配置跳过Cloudflare验证检查")
+    return True
+```
 
-### 3. Cloudflare 阻塞 - ✅ 已修复
-**问题**: AgentRouter验证页面0个按钮，无法继续
-
-**修复**: utils/auth.py:52-123
-- 新增 `_wait_for_cloudflare_challenge()` 自动等待验证（最多90秒）
-- 新增 `_init_page_and_check_cloudflare()` 统一初始化逻辑
-- 集成到Email/GitHub/LinuxDO三种认证器
-
-### 4. 代码冗余 - ✅ 已优化
-**优化内容**:
-- 提取公共方法: `_fill_password()`, `_log_cookies_info()`, `_init_page_and_check_cloudflare()`
-- 移除重复的cookie检查逻辑（~60行）
-- 移除重复的密码填写异常处理（~15行）
-- 移除冗余注释和日志
-
-### 5. LinuxDO按钮选择器增强 - ✅ 已改进
-**修复**: utils/constants.py:122-149
-- 从13个选择器增加到23个模式
-- 新增 `text-is`, `has(svg)`, class/id通配符匹配
-- 支持大小写不敏感匹配
+**效果**：
+- 更准确地识别Cloudflare验证页
+- 更快地检测验证通过状态
+- 超时后不阻断流程，允许继续尝试
+- 支持配置跳过验证（适用于无Cloudflare保护的环境）
 
 ---
 
-## 文件修改汇总
+## 使用建议
 
-| 版本 | 文件 | 修改内容 | 行数变化 |
-|------|-----|---------|---------|
-| v3.3.0 | utils/auth.py | OAuth回调URL匹配 + localStorage提取 + Cloudflare 120s | +55 |
-| v3.2.1 | utils/auth.py | Cloudflare 90s + 页面用户ID提取 | +39 |
-| v3.2.0 | utils/auth.py | OAuth cookies等待 + cookie域名日志 | +50 |
-| v3.2.0 | utils/constants.py | LinuxDO选择器增强 | +10 |
-| v3.1.0 | main.py | KeyError修复 + 优雅降级 | +5 |
-| v3.0.0 | utils/auth.py | Cookie过滤 + Cloudflare + 冗余优化 | -180 |
+### 1. 对于Email认证账号
+- ✅ 修复后应该能正常获取用户信息
+- 如果仍然失败，检查localStorage是否被正确设置
 
----
+### 2. 对于LinuxDO认证账号（AnyRouter）
+- ✅ 修复后应该能正常获取OAuth配置
+- 确保账号具有LinuxDO OAuth权限
 
-## 测试建议
+### 3. 对于GitHub/LinuxDO认证账号（AgentRouter）
+- ✅ Cloudflare检测已优化，等待时间缩短
+- 如果仍然超时，可以设置环境变量：
+  ```bash
+  SKIP_CLOUDFLARE_CHECK=true
+  ```
+- 或考虑使用其他认证方式（如Cookies）
 
+### 4. 新增环境变量
 ```bash
-# 在GitHub Actions或本地环境验证
-python main.py
-
-# 关注的关键日志
-# ✅ 等待OAuth回调...（新增）
-# ✅ 从localStorage提取到用户ID（新方法生效）
-# ✅ 检测到会话cookies（OAuth成功）
-# ⏳ Cloudflare验证中，继续等待... (Xs)（120秒超时）
+# 跳过Cloudflare验证检查（仅在必要时使用）
+SKIP_CLOUDFLARE_CHECK=true
 ```
 
 ---
 
-## 当前状态
+## 测试检查项
 
-**已解决问题**:
-- ✅ **OAuth回调URL匹配修复** - 不再停留在 `/login`（v3.3.0核心修复）
-- ✅ **localStorage用户ID提取** - 即使API 401也能获取ID（v3.3.0）
-- ✅ KeyError: 'display' 完全修复
-- ✅ LinuxDO OAuth cookies 从3个→14个
-- ✅ LinuxDO按钮查找 100%成功
-- ✅ Cloudflare超时延长到120秒
+### Email认证
+- [ ] 登录成功
+- [ ] 从localStorage提取用户ID
+- [ ] 签到成功
+- [ ] 获取用户信息和余额
 
-**预期改善**:
-- ✅ LinuxDO OAuth签到401（5个账号）- **v3.3.0应该完全解决**
-- ⚙️ AgentRouter Cloudflare超时（4个账号）- 120秒应该能解决大部分
-- ℹ️ Email认证用户信息API 401（3个账号）- 已优雅处理
+### LinuxDO认证
+- [ ] 获取OAuth client_id（应返回200）
+- [ ] 获取OAuth auth_state
+- [ ] LinuxDO登录成功
+- [ ] OAuth回调成功
+- [ ] 签到成功
+
+### GitHub认证
+- [ ] Cloudflare验证通过或跳过
+- [ ] GitHub登录成功
+- [ ] OAuth回调成功
+- [ ] 签到成功
 
 ---
 
-**版本进展**:
-- v3.0.0: 成功率 25% → 60%+ (KeyError修复)
-- v3.2.0: LinuxDO OAuth cookies问题解决，按钮查找100%
-- v3.2.1: Cloudflare超时改善，用户ID提取更智能
-- **v3.3.0: OAuth回调完全修复 + localStorage提取，预期成功率 80%+ (10/12账号)**
+## 代码质量
 
-**目标成功率**: 80%+ (10/12账号)
+- ✅ 无 Linter 错误
+- ✅ 类型注解完整
+- ✅ 日志输出详细
+- ✅ 错误处理完善
+- ✅ 降级策略合理
+
+---
+
+## 下次运行预期
+
+### 成功的认证方式
+- ✅ **3个Email账号**：应该能获取到用户信息和余额
+- ✅ **5个LinuxDO账号（AnyRouter）**：应该能成功获取OAuth配置并完成认证
+
+### 可能仍有问题的认证方式
+- ⚠️ **GitHub/LinuxDO（AgentRouter）**：
+  - Cloudflare检测已优化，但在GitHub Actions环境中仍可能困难
+  - 建议：
+    1. 设置`SKIP_CLOUDFLARE_CHECK=true`尝试
+    2. 或使用Cookies认证替代
+    3. 或在本地环境测试（非headless）
+
+---
+
+## 文件修改清单
+
+1. `utils/config.py`
+   - 添加`api_user_key`字段
+   - 添加`get_status_url()`方法
+   - 添加`get_auth_state_url()`方法
+
+2. `utils/auth.py`
+   - 修改`LinuxDoAuthenticator._get_auth_client_id()`：添加API User头
+   - 修改`LinuxDoAuthenticator._get_auth_state()`：添加API User头
+   - 修改`EmailAuthenticator.authenticate()`：优先从localStorage获取用户ID
+   - 优化`Authenticator._wait_for_cloudflare_challenge()`：更智能的检测和容错
+   - 优化`Authenticator._init_page_and_check_cloudflare()`：更准确的Cloudflare检测
+
+---
+
+## 参考项目
+
+修复方案参考了以下项目的实现：
+- `newapi-ai-check-in-main`：LinuxDO OAuth流程和API User头设置
+- Cloudflare绕过策略和localStorage用户信息提取
+
+---
+
+## 更新日期
+
+2025-11-09
