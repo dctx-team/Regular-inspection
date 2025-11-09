@@ -49,7 +49,7 @@ class Authenticator(ABC):
         """
         pass
 
-    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 60) -> bool:
+    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 45) -> bool:
         """等待Cloudflare验证完成（优化版）"""
         try:
             # 检查是否跳过Cloudflare验证
@@ -57,7 +57,7 @@ class Authenticator(ABC):
                 logger.info(f"ℹ️ 已配置跳过Cloudflare验证检查")
                 return True
             
-            logger.info(f"🛡️ 检测到可能的Cloudflare验证，等待完成...")
+            logger.info(f"🛡️ 检测到可能的Cloudflare验证，等待完成（最多{max_wait_seconds}秒）...")
             start_time = asyncio.get_event_loop().time()
 
             while asyncio.get_event_loop().time() - start_time < max_wait_seconds:
@@ -78,8 +78,8 @@ class Authenticator(ABC):
                     elapsed = int(asyncio.get_event_loop().time() - start_time)
                     logger.info(f"   ⏳ Cloudflare验证中，继续等待... ({elapsed}s)")
                     
-                    # 超过30秒后降低检测频率
-                    wait_time = 4000 if elapsed > 30 else 2000
+                    # 超过20秒后降低检测频率
+                    wait_time = 3000 if elapsed > 20 else 1500
                     await page.wait_for_timeout(wait_time)
                     continue
 
@@ -89,12 +89,19 @@ class Authenticator(ABC):
                     return True
 
                 # 检查登录页面特征（更可靠的判断）
-                login_indicators = await page.query_selector_all('input[type="email"], input[type="password"], input[name="login"], button:has-text("登录"), button:has-text("Login")')
-                if len(login_indicators) > 0:
-                    logger.info(f"✅ 检测到登录表单，验证已完成")
-                    return True
+                try:
+                    login_indicators = await page.query_selector_all(
+                        'input[type="email"], input[type="password"], input[name="login"], '
+                        'button:has-text("登录"), button:has-text("Login")'
+                    )
+                    if len(login_indicators) > 0:
+                        logger.info(f"✅ 检测到登录表单，验证已完成")
+                        return True
+                except:
+                    pass
 
-                await page.wait_for_timeout(2000)
+                # 更短的等待时间
+                await page.wait_for_timeout(1000)
 
             logger.warning(f"⚠️ Cloudflare验证等待超时({max_wait_seconds}s)，尝试继续...")
             # 超时后不直接返回False，而是尝试继续（可能是误判）
@@ -560,7 +567,7 @@ class EmailAuthenticator(Authenticator):
 class GitHubAuthenticator(Authenticator):
     """GitHub OAuth 认证"""
 
-    async def _get_github_oauth_params(self, cookies: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    async def _get_github_oauth_params(self, cookies: Dict[str, str], page: Page = None) -> Optional[Dict[str, Any]]:
         """获取 GitHub OAuth 参数（client_id 和 auth_state）"""
         try:
             import httpx
@@ -588,9 +595,48 @@ class GitHubAuthenticator(Authenticator):
                     if 'text/html' in content_type:
                         logger.error(f"❌ [{self.auth_config.username}] API 返回 HTML 而非 JSON，可能是 Cloudflare 验证页面")
                         logger.info(f"   响应内容片段: {status_response.text[:300]}")
+                        
+                        # 如果提供了 page 对象，尝试通过浏览器执行 API 请求
+                        if page:
+                            logger.warning(f"⚠️ [{self.auth_config.username}] 尝试通过浏览器执行 API 请求以绕过 Cloudflare...")
+                            try:
+                                # 使用浏览器的 evaluate 来发送 API 请求，这样可以使用浏览器的 Cloudflare cookies
+                                status_result = await page.evaluate(f"""
+                                    async () => {{
+                                        try {{
+                                            const response = await fetch('{self.provider_config.get_status_url()}', {{
+                                                method: 'GET',
+                                                headers: {{
+                                                    'Accept': 'application/json',
+                                                    '{self.provider_config.api_user_key}': '-1'
+                                                }},
+                                                credentials: 'include'
+                                            }});
+                                            if (!response.ok) {{
+                                                return {{ success: false, error: `HTTP ${{response.status}}` }};
+                                            }}
+                                            const data = await response.json();
+                                            return {{ success: true, data: data }};
+                                        }} catch (e) {{
+                                            return {{ success: false, error: e.toString() }};
+                                        }}
+                                    }}
+                                """)
+                                
+                                if status_result and status_result.get('success'):
+                                    status_data = status_result.get('data')
+                                    logger.info(f"✅ [{self.auth_config.username}] 通过浏览器成功获取 API 响应")
+                                else:
+                                    logger.error(f"❌ [{self.auth_config.username}] 浏览器 API 请求也失败: {status_result.get('error')}")
+                                    return None
+                            except Exception as browser_error:
+                                logger.error(f"❌ [{self.auth_config.username}] 浏览器 API 请求异常: {browser_error}")
+                                return None
+                        else:
+                            return None
+                    else:
+                        logger.info(f"   响应内容: {status_response.text[:200]}")
                         return None
-                    logger.info(f"   响应内容: {status_response.text[:200]}")
-                    return None
 
                 if not status_data.get("success"):
                     logger.error(f"❌ [{self.auth_config.username}] status API 返回失败")
@@ -659,7 +705,7 @@ class GitHubAuthenticator(Authenticator):
 
             # 第三步：获取 GitHub OAuth 参数
             logger.info(f"🔑 [{self.auth_config.username}] 获取 GitHub OAuth 参数...")
-            oauth_params = await self._get_github_oauth_params(cookies_dict)
+            oauth_params = await self._get_github_oauth_params(cookies_dict, page)
             if not oauth_params:
                 logger.warning(f"⚠️ [{self.auth_config.username}] 首次获取失败，尝试通过浏览器访问 API...")
                 # 通过浏览器访问 status API 以获取 Cloudflare cookies
@@ -674,10 +720,10 @@ class GitHubAuthenticator(Authenticator):
                     retry_cookies_dict = {cookie["name"]: cookie["value"] for cookie in retry_cookies}
                     logger.info(f"🍪 [{self.auth_config.username}] 重新获取到 {len(retry_cookies_dict)} 个cookies")
                     
-                    oauth_params = await self._get_github_oauth_params(retry_cookies_dict)
+                    oauth_params = await self._get_github_oauth_params(retry_cookies_dict, page)
                 except Exception as browser_error:
                     logger.error(f"❌ [{self.auth_config.username}] 浏览器访问失败: {browser_error}")
-                
+
                 if not oauth_params:
                     return {"success": False, "error": "Failed to get GitHub OAuth parameters after retry"}
 
@@ -840,7 +886,7 @@ class GitHubAuthenticator(Authenticator):
 class LinuxDoAuthenticator(Authenticator):
     """Linux.do OAuth 认证"""
 
-    async def _get_auth_client_id(self, cookies: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    async def _get_auth_client_id(self, cookies: Dict[str, str], page: Page = None) -> Optional[Dict[str, Any]]:
         """获取 LinuxDO OAuth 客户端 ID"""
         try:
             import httpx
@@ -867,8 +913,49 @@ class LinuxDoAuthenticator(Authenticator):
                             # 检查是否包含 Cloudflare 标记
                             if 'cloudflare' in response.text.lower() or 'verification' in response.text.lower():
                                 logger.error(f"❌ [{self.auth_config.username}] 确认是 Cloudflare 验证页面，需要先通过浏览器访问")
-                        logger.info(f"   响应内容: {response.text[:200]}")
-                        return None
+                            
+                            # 如果提供了 page 对象，尝试通过浏览器执行 API 请求
+                            if page:
+                                logger.warning(f"⚠️ [{self.auth_config.username}] 尝试通过浏览器执行 API 请求以绕过 Cloudflare...")
+                                try:
+                                    # 使用浏览器的 evaluate 来发送 API 请求
+                                    status_result = await page.evaluate(f"""
+                                        async () => {{
+                                            try {{
+                                                const response = await fetch('{self.provider_config.get_status_url()}', {{
+                                                    method: 'GET',
+                                                    headers: {{
+                                                        'Accept': 'application/json',
+                                                        '{self.provider_config.api_user_key}': '-1'
+                                                    }},
+                                                    credentials: 'include'
+                                                }});
+                                                if (!response.ok) {{
+                                                    return {{ success: false, error: `HTTP ${{response.status}}` }};
+                                                }}
+                                                const data = await response.json();
+                                                return {{ success: true, data: data }};
+                                            }} catch (e) {{
+                                                return {{ success: false, error: e.toString() }};
+                                            }}
+                                        }}
+                                    """)
+                                    
+                                    if status_result and status_result.get('success'):
+                                        data = status_result.get('data')
+                                        logger.info(f"✅ [{self.auth_config.username}] 通过浏览器成功获取 API 响应")
+                                    else:
+                                        logger.error(f"❌ [{self.auth_config.username}] 浏览器 API 请求也失败: {status_result.get('error')}")
+                                        return None
+                                except Exception as browser_error:
+                                    logger.error(f"❌ [{self.auth_config.username}] 浏览器 API 请求异常: {browser_error}")
+                                    return None
+                            else:
+                                logger.info(f"   响应内容: {response.text[:200]}")
+                                return None
+                        else:
+                            logger.info(f"   响应内容: {response.text[:200]}")
+                            return None
                     
                     if data.get("success"):
                         status_data = data.get("data", {})
@@ -970,7 +1057,7 @@ class LinuxDoAuthenticator(Authenticator):
 
             # 第三步：获取 OAuth client_id
             logger.info(f"🔑 [{self.auth_config.username}] 获取 LinuxDO OAuth client_id...")
-            client_id_result = await self._get_auth_client_id(cookies_dict)
+            client_id_result = await self._get_auth_client_id(cookies_dict, page)
             if not client_id_result:
                 logger.warning(f"⚠️ [{self.auth_config.username}] 首次获取失败，尝试通过浏览器访问 API...")
                 # 通过浏览器访问 status API 以获取 Cloudflare cookies
@@ -985,7 +1072,7 @@ class LinuxDoAuthenticator(Authenticator):
                     retry_cookies_dict = {cookie["name"]: cookie["value"] for cookie in retry_cookies}
                     logger.info(f"🍪 [{self.auth_config.username}] 重新获取到 {len(retry_cookies_dict)} 个cookies")
                     
-                    client_id_result = await self._get_auth_client_id(retry_cookies_dict)
+                    client_id_result = await self._get_auth_client_id(retry_cookies_dict, page)
                 except Exception as browser_error:
                     logger.error(f"❌ [{self.auth_config.username}] 浏览器访问失败: {browser_error}")
                 
@@ -1051,34 +1138,71 @@ class LinuxDoAuthenticator(Authenticator):
                         current_url_after_login = page.url
                         logger.info(f"🔍 [{self.auth_config.username}] 登录后URL: {current_url_after_login}")
                         
-                        if "challenge" in current_url_after_login.lower():
-                            logger.warning(f"⚠️ [{self.auth_config.username}] 检测到验证挑战，等待60秒...")
+                        # 检查是否在 challenge 页面
+                        if "/challenge" in current_url_after_login or "challenge" in current_url_after_login.lower():
+                            logger.warning(f"⚠️ [{self.auth_config.username}] 检测到验证挑战（challenge页面），等待60秒...")
                             try:
-                                # 等待授权按钮出现（表示验证通过）
-                                await page.wait_for_selector('a[href^="/oauth2/approve"]', timeout=60000)
-                                logger.info(f"✅ [{self.auth_config.username}] 验证挑战已通过")
+                                # 等待授权按钮出现或者URL变化（表示验证通过）
+                                await page.wait_for_url(lambda url: "/challenge" not in url.lower(), timeout=60000)
+                                logger.info(f"✅ [{self.auth_config.username}] 已离开验证挑战页面")
+                                await page.wait_for_timeout(2000)
+                                current_url_after_login = page.url
+                                logger.info(f"🔍 [{self.auth_config.username}] 新URL: {current_url_after_login}")
                             except:
-                                logger.error(f"❌ [{self.auth_config.username}] 验证挑战超时")
+                                logger.error(f"❌ [{self.auth_config.username}] 验证挑战超时（60秒）")
                                 return {"success": False, "error": "Challenge verification timeout"}
                         
+                        # 检查是否仍在登录页面
                         if "/login" in current_url_after_login:
-                            # 检查是否有错误消息
+                            # 先检查是否有授权按钮（说明其实已经登录了，只是在OAuth授权页）
                             try:
-                                error_elem = await page.query_selector('.alert-error, .error, [class*="error"]')
-                                if error_elem:
-                                    error_text = await error_elem.inner_text()
-                                    logger.error(f"❌ [{self.auth_config.username}] 登录失败: {error_text}")
-                                    return {"success": False, "error": f"Login failed: {error_text}"}
+                                allow_btn_check = await page.query_selector('a[href^="/oauth2/approve"]')
+                                if allow_btn_check:
+                                    logger.info(f"✅ [{self.auth_config.username}] 检测到授权按钮，登录成功")
+                                    # 登录成功，跳过错误检查
+                                else:
+                                    raise Exception("No authorize button found")
                             except:
-                                pass
-                            
-                            # 检查是否需要验证码
-                            captcha_elem = await page.query_selector('[class*="captcha"], [id*="captcha"], iframe[src*="recaptcha"]')
-                            if captcha_elem:
-                                logger.error(f"❌ [{self.auth_config.username}] 需要验证码，无法自动处理")
-                                return {"success": False, "error": "Login requires CAPTCHA verification"}
-                            
-                            logger.warning(f"⚠️ [{self.auth_config.username}] 登录后仍在登录页面，可能需要人工干预或凭据错误")
+                                # 没有授权按钮，检查错误信息
+                                # 检查是否有错误消息
+                                try:
+                                    error_elem = await page.query_selector('.alert-error, .error, [class*="error"]:not([class*="error-boundary"])')
+                                    if error_elem:
+                                        error_text = await error_elem.inner_text()
+                                        if error_text and len(error_text.strip()) > 0:
+                                            logger.error(f"❌ [{self.auth_config.username}] 登录失败: {error_text}")
+                                            return {"success": False, "error": f"Login failed: {error_text}"}
+                                except:
+                                    pass
+                                
+                                # 检查是否需要验证码
+                                try:
+                                    captcha_elem = await page.query_selector('[class*="captcha"], [id*="captcha"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"]')
+                                    if captcha_elem:
+                                        logger.error(f"❌ [{self.auth_config.username}] 需要验证码，无法自动处理")
+                                        return {"success": False, "error": "Login requires CAPTCHA verification"}
+                                except:
+                                    pass
+                                
+                                # 检查账号密码输入框是否还存在（说明登录未成功）
+                                try:
+                                    username_still = await page.query_selector('input[id="login-account-name"]')
+                                    password_still = await page.query_selector('input[id="login-account-password"]')
+                                    if username_still and password_still:
+                                        logger.warning(f"⚠️ [{self.auth_config.username}] 登录表单仍然存在，登录可能失败")
+                                        logger.warning(f"⚠️ [{self.auth_config.username}] 这可能是由于：凭据错误、需要人工验证、或网络问题")
+                                        
+                                        # 尝试截取页面内容用于调试
+                                        try:
+                                            page_title = await page.title()
+                                            logger.info(f"   页面标题: {page_title}")
+                                        except:
+                                            pass
+                                        
+                                        # 不立即返回错误，让后续检查决定
+                                        logger.warning(f"⚠️ [{self.auth_config.username}] 继续尝试查找授权按钮...")
+                                except:
+                                    pass
                 else:
                     logger.error(f"❌ [{self.auth_config.username}] 未找到登录表单")
                     return {"success": False, "error": "Login form not found"}
@@ -1091,20 +1215,39 @@ class LinuxDoAuthenticator(Authenticator):
                 current_check_url = page.url
                 logger.info(f"🔍 [{self.auth_config.username}] 当前URL: {current_check_url}")
                 
-                # 如果还在登录页面，说明登录失败
+                # 如果还在登录页面，先尝试等待一下授权按钮，可能登录成功了但URL未变化
                 if "/login" in current_check_url:
-                    logger.error(f"❌ [{self.auth_config.username}] 仍在登录页面，无法继续")
-                    
-                    # 尝试获取页面内容用于调试
+                    logger.info(f"ℹ️ [{self.auth_config.username}] 当前在登录页面，尝试查找授权按钮...")
                     try:
-                        page_title = await page.title()
-                        logger.info(f"   页面标题: {page_title}")
+                        # 等待最多5秒看是否出现授权按钮
+                        await page.wait_for_selector('a[href^="/oauth2/approve"]', timeout=5000)
+                        logger.info(f"✅ [{self.auth_config.username}] 找到授权按钮，登录应该成功了")
                     except:
-                        pass
-                    
-                    return {"success": False, "error": "Still on login page - credentials may be invalid or CAPTCHA required"}
-                
-                await page.wait_for_selector('a[href^="/oauth2/approve"]', timeout=30000)
+                        # 5秒后还没有授权按钮，说明登录确实失败了
+                        logger.error(f"❌ [{self.auth_config.username}] 仍在登录页面且未找到授权按钮，登录失败")
+                        
+                        # 尝试获取页面内容用于调试
+                        try:
+                            page_title = await page.title()
+                            logger.info(f"   页面标题: {page_title}")
+                            
+                            # 检查是否有明显的错误提示
+                            error_messages = await page.query_selector_all('.alert, [class*="error"], .error-message')
+                            if error_messages:
+                                for msg_elem in error_messages[:3]:  # 只显示前3个
+                                    try:
+                                        msg_text = await msg_elem.inner_text()
+                                        if msg_text and msg_text.strip():
+                                            logger.info(f"   错误提示: {msg_text.strip()}")
+                                    except:
+                                        pass
+                        except:
+                            pass
+                        
+                        return {"success": False, "error": "Still on login page - credentials may be invalid or CAPTCHA required"}
+                else:
+                    # 不在登录页面，正常等待授权按钮
+                    await page.wait_for_selector('a[href^="/oauth2/approve"]', timeout=30000)
 
                 allow_btn = await page.query_selector('a[href^="/oauth2/approve"]')
                 if allow_btn:
