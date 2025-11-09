@@ -662,6 +662,97 @@ class GitHubAuthenticator(Authenticator):
 class LinuxDoAuthenticator(Authenticator):
     """Linux.do OAuth 认证"""
 
+    async def _get_auth_client_id(self, cookies: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """获取 LinuxDO OAuth 客户端 ID"""
+        try:
+            import httpx
+            headers = {
+                "User-Agent": DEFAULT_USER_AGENT,
+                "Accept": "application/json",
+                "Referer": self.provider_config.base_url,
+                "Origin": self.provider_config.base_url
+            }
+
+            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, verify=True) as client:
+                response = await client.get(self.provider_config.get_status_url(), headers=headers)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("success"):
+                        status_data = data.get("data", {})
+
+                        # 检查 LinuxDO OAuth 是否启用
+                        if not status_data.get("linuxdo_oauth", False):
+                            logger.error(f"❌ [{self.auth_config.username}] LinuxDO OAuth 未启用")
+                            return None
+
+                        client_id = status_data.get("linuxdo_client_id", "")
+                        if client_id:
+                            logger.info(f"✅ [{self.auth_config.username}] 获取到 LinuxDO client_id: {client_id}")
+                            return {"client_id": client_id}
+                        else:
+                            logger.error(f"❌ [{self.auth_config.username}] LinuxDO client_id 为空")
+                            return None
+                else:
+                    logger.error(f"❌ [{self.auth_config.username}] 获取 client_id 失败: HTTP {response.status_code}")
+                    return None
+        except Exception as e:
+            logger.error(f"❌ [{self.auth_config.username}] 获取 client_id 异常: {e}")
+            return None
+
+    async def _get_auth_state(self, cookies: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """获取 OAuth 认证状态"""
+        try:
+            import httpx
+            from urllib.parse import urlparse
+
+            headers = {
+                "User-Agent": DEFAULT_USER_AGENT,
+                "Accept": "application/json",
+                "Referer": self.provider_config.base_url,
+                "Origin": self.provider_config.base_url
+            }
+
+            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, verify=True) as client:
+                response = await client.get(self.provider_config.get_auth_state_url(), headers=headers)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("success"):
+                        auth_data = data.get("data")
+
+                        # 将 httpx Cookies 转换为 Playwright 格式
+                        playwright_cookies = []
+                        if response.cookies:
+                            parsed_domain = urlparse(self.provider_config.base_url).netloc
+
+                            for cookie in response.cookies.jar:
+                                http_only = cookie.has_nonstandard_attr("httponly")
+                                same_site = cookie.get_nonstandard_attr("samesite", "Lax")
+
+                                playwright_cookies.append({
+                                    "name": cookie.name,
+                                    "value": cookie.value,
+                                    "domain": cookie.domain if cookie.domain else parsed_domain,
+                                    "path": cookie.path,
+                                    "expires": cookie.expires,
+                                    "httpOnly": http_only,
+                                    "secure": cookie.secure,
+                                    "sameSite": same_site
+                                })
+
+                        logger.info(f"✅ [{self.auth_config.username}] 获取到 auth_state: {auth_data}")
+                        return {
+                            "auth_data": auth_data,
+                            "cookies": playwright_cookies
+                        }
+                else:
+                    logger.error(f"❌ [{self.auth_config.username}] 获取 auth_state 失败: HTTP {response.status_code}")
+                    return None
+        except Exception as e:
+            logger.error(f"❌ [{self.auth_config.username}] 获取 auth_state 异常: {e}")
+            return None
+
     async def authenticate(self, page: Page, context: BrowserContext) -> Dict[str, Any]:
         """使用 Linux.do 登录"""
         try:
@@ -670,95 +761,101 @@ class LinuxDoAuthenticator(Authenticator):
             if not await self._init_page_and_check_cloudflare(page):
                 return {"success": False, "error": "Cloudflare verification timeout"}
 
-            try:
-                await page.keyboard.press('Escape')
-                await page.wait_for_timeout(300)
-                close_btn = await page.query_selector('.semi-modal .semi-modal-close, [aria-label="Close"], button:has-text("关闭"), button:has-text("我知道了")')
-                if close_btn:
-                    await close_btn.click()
-                    await page.wait_for_timeout(300)
-            except:
-                pass
+            # 第一步：获取初始cookies（用于后续API请求）
+            logger.info(f"🔑 [{self.auth_config.username}] 获取初始cookies...")
+            await page.wait_for_timeout(2000)
+            initial_cookies = await context.cookies()
+            cookies_dict = {cookie["name"]: cookie["value"] for cookie in initial_cookies}
 
-            logger.info(f"🔍 [{self.auth_config.username}] 查找LinuxDO登录按钮...")
-            linux_button = None
+            # 第二步：获取 OAuth client_id
+            logger.info(f"🔑 [{self.auth_config.username}] 获取 LinuxDO OAuth client_id...")
+            client_id_result = await self._get_auth_client_id(cookies_dict)
+            if not client_id_result:
+                return {"success": False, "error": "Failed to get LinuxDO client_id"}
+
+            client_id = client_id_result["client_id"]
+
+            # 第三步：获取 auth_state
+            logger.info(f"🔑 [{self.auth_config.username}] 获取 OAuth auth_state...")
+            auth_state_result = await self._get_auth_state(cookies_dict)
+            if not auth_state_result:
+                return {"success": False, "error": "Failed to get OAuth auth_state"}
+
+            auth_state = auth_state_result["auth_data"]
+            auth_cookies = auth_state_result["cookies"]
+
+            # 设置从API获取的cookies
+            if auth_cookies:
+                await context.add_cookies(auth_cookies)
+                logger.info(f"✅ [{self.auth_config.username}] 设置了 {len(auth_cookies)} 个auth cookies")
+
+            # 第四步：构造完整的OAuth URL并直接访问
+            oauth_url = f"https://connect.linux.do/oauth2/authorize?response_type=code&client_id={client_id}&state={auth_state}"
+            logger.info(f"🔗 [{self.auth_config.username}] 访问 LinuxDO OAuth URL...")
+            logger.info(f"   URL: {oauth_url}")
+
+            await page.goto(oauth_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(2000)
 
-            for sel in LINUXDO_BUTTON_SELECTORS:
-                try:
-                    linux_button = await page.query_selector(sel)
-                    if linux_button:
-                        logger.info(f"✅ [{self.auth_config.username}] 找到LinuxDO登录选项: {sel}")
-                        break
-                except:
-                    continue
+            # 第五步：检查是否需要登录
+            current_url = page.url
+            logger.info(f"🔍 [{self.auth_config.username}] 当前URL: {current_url}")
 
-            if not linux_button:
-                try:
-                    page_title = await page.title()
-                    logger.error(f"❌ [{self.auth_config.username}] LinuxDO登录按钮未找到")
-                    logger.info(f"   当前页面: {page_title}, URL: {page.url}")
+            if "linux.do" in current_url and "/login" in current_url:
+                # 需要登录
+                logger.info(f"🔐 [{self.auth_config.username}] 需要登录到 Linux.do...")
 
-                    all_buttons = await page.query_selector_all('button, a[href]')
-                    logger.info(f"   页面共有 {len(all_buttons)} 个按钮/链接")
-
-                    for i, btn in enumerate(all_buttons[:8]):
-                        try:
-                            btn_text = await btn.inner_text()
-                            if btn_text and btn_text.strip():
-                                logger.info(f"     {await btn.evaluate('el => el.tagName.toLowerCase()')}: {btn_text.strip()[:50]}")
-                        except:
-                            pass
-
-                    login_containers = await page.query_selector_all('.login, .auth, .oauth, .third-party')
-                    if login_containers:
-                        logger.info(f"   找到 {len(login_containers)} 个可能的登录容器")
-                        for container in login_containers[:2]:
-                            try:
-                                first_btn = await container.query_selector('button, a')
-                                if first_btn:
-                                    btn_text = await first_btn.inner_text()
-                                    logger.info(f"   尝试点击容器内按钮: {btn_text.strip()[:30]}")
-                                    await first_btn.click()
-                                    await page.wait_for_timeout(2000)
-
-                                    if "linux.do" in page.url:
-                                        logger.info(f"✅ [{self.auth_config.username}] 通过容器按钮成功跳转到Linux.do")
-                                        linux_button = first_btn
-                                        break
-                            except:
-                                continue
-                except Exception as e:
-                    logger.info(f"   调试信息获取失败: {e}")
-
-            if not linux_button:
-                return {"success": False, "error": "LinuxDO login button not found"}
-
-            await linux_button.click()
-            await page.wait_for_load_state("networkidle", timeout=15000)
-
-            if "linux.do" in page.url:
                 username_input = await page.query_selector('input[id="login-account-name"]')
                 password_input = await page.query_selector('input[id="login-account-password"]')
 
                 if username_input and password_input:
                     await username_input.fill(self.auth_config.username)
+                    await page.wait_for_timeout(500)
+
                     error = await self._fill_password(password_input)
                     if error:
                         return {"success": False, "error": error}
 
+                    await page.wait_for_timeout(500)
+
                     login_button = await page.query_selector('button[id="login-button"]')
                     if login_button:
                         await login_button.click()
-                        await page.wait_for_load_state("networkidle", timeout=15000)
+                        logger.info(f"✅ [{self.auth_config.username}] 点击登录按钮")
+                        await page.wait_for_timeout(3000)
 
-            # 等待OAuth回调到 /oauth/ 路径（避免停留在 /login）
+            # 第六步：等待授权按钮并点击
+            try:
+                logger.info(f"⏳ [{self.auth_config.username}] 等待授权按钮...")
+                await page.wait_for_selector('a[href^="/oauth2/approve"]', timeout=30000)
+
+                allow_btn = await page.query_selector('a[href^="/oauth2/approve"]')
+                if allow_btn:
+                    logger.info(f"✅ [{self.auth_config.username}] 找到授权按钮，点击授权...")
+                    await allow_btn.click()
+                else:
+                    return {"success": False, "error": "Authorization button not found"}
+
+            except Exception as e:
+                logger.error(f"❌ [{self.auth_config.username}] 等待授权按钮超时: {e}")
+                logger.info(f"   当前URL: {page.url}")
+                return {"success": False, "error": f"Authorization button timeout: {sanitize_exception(e)}"}
+
+            # 第七步：等待OAuth回调
             logger.info(f"⏳ [{self.auth_config.username}] 等待OAuth回调...")
-            await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=30000)
+            try:
+                await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=30000)
+            except Exception as e:
+                logger.warning(f"⚠️ [{self.auth_config.username}] OAuth回调等待超时，检查当前URL...")
+                current_url = page.url
+                if "/oauth/" in current_url:
+                    logger.info(f"✅ [{self.auth_config.username}] 已在OAuth回调页面")
+                else:
+                    return {"success": False, "error": f"OAuth callback timeout: {sanitize_exception(e)}"}
 
-            # 等待cookies传播完成
+            # 第八步：等待cookies设置完成
             logger.info(f"🔄 [{self.auth_config.username}] OAuth回调完成，等待cookies设置...")
-            await page.wait_for_timeout(3000)  # 等待3秒让cookies传播
+            await page.wait_for_timeout(3000)
             await self._wait_for_session_cookies(context, max_wait_seconds=10)
 
             final_cookies = await context.cookies()
@@ -766,7 +863,7 @@ class LinuxDoAuthenticator(Authenticator):
 
             self._log_cookies_info(cookies_dict, final_cookies, "LinuxDO")
 
-            # 优先从localStorage提取用户ID，失败则尝试API
+            # 第九步：提取用户信息
             user_id, username = await self._extract_user_from_localstorage(page)
             if not user_id:
                 logger.info(f"ℹ️ [{self.auth_config.username}] localStorage未获取到用户ID，尝试API")

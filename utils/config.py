@@ -19,6 +19,8 @@ class ProviderConfig:
     login_url: str
     checkin_url: str
     user_info_url: str
+    status_url: str = None  # API 状态接口，用于获取 client_id
+    auth_state_url: str = None  # OAuth 认证状态接口
 
     def get_login_url(self) -> str:
         """获取登录URL"""
@@ -31,6 +33,14 @@ class ProviderConfig:
     def get_user_info_url(self) -> str:
         """获取用户信息URL"""
         return self.user_info_url
+
+    def get_status_url(self) -> str:
+        """获取状态URL"""
+        return self.status_url or f"{self.base_url}/api/status"
+
+    def get_auth_state_url(self) -> str:
+        """获取OAuth认证状态URL"""
+        return self.auth_state_url or f"{self.base_url}/api/oauth/state"
 
 
 @dataclass
@@ -116,7 +126,9 @@ class AppConfig:
                 base_url="https://anyrouter.top",
                 login_url="https://anyrouter.top/login",
                 checkin_url="https://anyrouter.top/api/user/sign_in",
-                user_info_url="https://anyrouter.top/api/user/self"
+                user_info_url="https://anyrouter.top/api/user/self",
+                status_url="https://anyrouter.top/api/user/status",
+                auth_state_url="https://anyrouter.top/api/oauth/auth-state"
             ),
             "agentrouter": ProviderConfig(
                 name="AgentRouter",
@@ -124,7 +136,9 @@ class AppConfig:
                 login_url="https://agentrouter.org/login",
                 # AgentRouter 使用 sign_in 接口，如果404则自动查询用户信息进行保活
                 checkin_url="https://agentrouter.org/api/user/sign_in",
-                user_info_url="https://agentrouter.org/api/user/self"
+                user_info_url="https://agentrouter.org/api/user/self",
+                status_url="https://agentrouter.org/api/user/status",
+                auth_state_url="https://agentrouter.org/api/oauth/auth-state"
             )
         }
 
