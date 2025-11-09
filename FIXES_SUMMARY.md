@@ -1,6 +1,81 @@
 # Router签到脚本修复总结
 
-## 最新修复 (2025-11-09) - v3.3.0
+## 最新修复 (2025-11-09) - v3.4.0
+
+### 1. LinuxDO OAuth完整重写 - ✅ 核心修复
+**问题**: LinuxDO OAuth认证根本实现错误，只是点击按钮，没有正确的API调用流程
+
+**参考方案**: 从 `G:\GitHub_local\Self-built\script\newapi-ai-check-in-main` 项目学习完整OAuth流程
+- sign_in_with_linuxdo.py 展示了正确的API调用顺序
+
+**修复内容**:
+
+#### A. 新增API端点配置 (utils/config.py)
+```python
+# ProviderConfig 新增字段
+status_url: str = None  # API 状态接口，用于获取 client_id
+auth_state_url: str = None  # OAuth 认证状态接口
+
+# 添加获取方法
+def get_status_url(self) -> str:
+    return self.status_url or f"{self.base_url}/api/status"
+
+def get_auth_state_url(self) -> str:
+    return self.auth_state_url or f"{self.base_url}/api/oauth/state"
+```
+
+#### B. 实现LinuxDO OAuth API调用 (utils/auth.py:665-755)
+```python
+async def _get_auth_client_id(self, cookies: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """获取 LinuxDO OAuth 客户端 ID"""
+    # 调用 /api/user/status 获取 linuxdo_client_id
+
+async def _get_auth_state(self, cookies: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """获取 OAuth 认证状态"""
+    # 调用 /api/oauth/auth-state 获取认证状态
+```
+
+#### C. 重写认证流程 (utils/auth.py:756-875)
+完整的9步流程：
+1. 获取初始cookies（用于后续API请求）
+2. 调用API获取 OAuth client_id
+3. 调用API获取 auth_state
+4. 构造完整OAuth URL并直接访问：`https://connect.linux.do/oauth2/authorize?response_type=code&client_id={client_id}&state={auth_state}`
+5. 检查是否需要在Linux.do登录
+6. 等待授权按钮并点击
+7. 等待OAuth回调到 `/oauth/` 路径
+8. 等待cookies设置完成
+9. 提取用户信息（localStorage优先）
+
+**效果**:
+- ✅ LinuxDO OAuth从根本上修复，使用正确的API流程
+- ✅ 不再依赖查找登录按钮，直接通过API构造OAuth URL
+- ✅ 预期5个LinuxDO账号全部成功
+
+### 2. OAuth回调URL匹配修复 - ✅ 已修复
+**问题**: OAuth回调后页面停留在 `/login` 而非 `/oauth/`，导致401错误
+
+**修复**: utils/auth.py:846, 576
+```python
+# 正确的模式 - 只匹配 /oauth/ 路径
+await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=30000)
+```
+
+### 3. localStorage用户ID提取 - ✅ 已添加
+**问题**: OAuth成功但用户信息API返回401，无法获取用户ID
+
+**修复**: utils/auth.py:176-201
+- 新增 `_extract_user_from_localstorage()` 方法
+- 优先从localStorage提取，失败则降级到API
+
+### 4. Cloudflare超时延长 - ✅ 已优化
+**修复**: utils/auth.py:52
+- 将超时时间延长到120秒
+- 预期AgentRouter 4个账号能成功2-4个
+
+---
+
+## 历史修复 (2025-11-09) - v3.3.0
 
 ### 1. OAuth回调URL匹配修复 - ✅ 已修复 (核心问题)
 **问题**: LinuxDO/GitHub OAuth回调后页面停留在 `/login` 而非 `/console`，导致401错误
