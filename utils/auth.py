@@ -560,6 +560,79 @@ class EmailAuthenticator(Authenticator):
 class GitHubAuthenticator(Authenticator):
     """GitHub OAuth 认证"""
 
+    async def _get_github_oauth_params(self, cookies: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """获取 GitHub OAuth 参数（client_id 和 auth_state）"""
+        try:
+            import httpx
+            headers = {
+                "User-Agent": DEFAULT_USER_AGENT,
+                "Accept": "application/json",
+                "Referer": self.provider_config.base_url,
+                "Origin": self.provider_config.base_url,
+                self.provider_config.api_user_key: "-1"
+            }
+
+            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, verify=True) as client:
+                # 获取 client_id
+                status_response = await client.get(self.provider_config.get_status_url(), headers=headers)
+                if status_response.status_code != 200:
+                    logger.error(f"❌ [{self.auth_config.username}] 获取 GitHub client_id 失败: HTTP {status_response.status_code}")
+                    return None
+
+                try:
+                    status_data = status_response.json()
+                except Exception as e:
+                    logger.error(f"❌ [{self.auth_config.username}] 解析 status API 响应失败: {e}")
+                    return None
+
+                if not status_data.get("success"):
+                    logger.error(f"❌ [{self.auth_config.username}] status API 返回失败")
+                    return None
+
+                data = status_data.get("data", {})
+                if not data.get("github_oauth", False):
+                    logger.error(f"❌ [{self.auth_config.username}] GitHub OAuth 未启用")
+                    return None
+
+                client_id = data.get("github_client_id", "")
+                if not client_id:
+                    logger.error(f"❌ [{self.auth_config.username}] GitHub client_id 为空")
+                    return None
+
+                logger.info(f"✅ [{self.auth_config.username}] 获取到 GitHub client_id: {client_id}")
+
+                # 获取 auth_state
+                state_response = await client.get(self.provider_config.get_auth_state_url(), headers=headers)
+                if state_response.status_code != 200:
+                    logger.error(f"❌ [{self.auth_config.username}] 获取 auth_state 失败: HTTP {state_response.status_code}")
+                    return None
+
+                try:
+                    state_data = state_response.json()
+                except Exception as e:
+                    logger.error(f"❌ [{self.auth_config.username}] 解析 auth_state API 响应失败: {e}")
+                    return None
+
+                if not state_data.get("success"):
+                    logger.error(f"❌ [{self.auth_config.username}] auth_state API 返回失败")
+                    return None
+
+                auth_state = state_data.get("data", "")
+                if not auth_state:
+                    logger.error(f"❌ [{self.auth_config.username}] auth_state 为空")
+                    return None
+
+                logger.info(f"✅ [{self.auth_config.username}] 获取到 auth_state")
+
+                return {
+                    "client_id": client_id,
+                    "auth_state": auth_state
+                }
+
+        except Exception as e:
+            logger.error(f"❌ [{self.auth_config.username}] 获取 GitHub OAuth 参数异常: {e}")
+            return None
+
     async def authenticate(self, page: Page, context: BrowserContext) -> Dict[str, Any]:
         """使用 GitHub 登录"""
         try:
@@ -568,49 +641,89 @@ class GitHubAuthenticator(Authenticator):
             if not await self._init_page_and_check_cloudflare(page):
                 return {"success": False, "error": "Cloudflare verification timeout"}
 
-            github_button = None
-            for sel in GITHUB_BUTTON_SELECTORS:
-                try:
-                    github_button = await page.query_selector(sel)
-                    if github_button:
-                        break
-                except:
-                    continue
+            # 第一步：获取初始cookies
+            logger.info(f"🔑 [{self.auth_config.username}] 获取初始cookies...")
+            await page.wait_for_timeout(2000)
+            initial_cookies = await context.cookies()
+            cookies_dict = {cookie["name"]: cookie["value"] for cookie in initial_cookies}
 
-            if not github_button:
-                return {"success": False, "error": "GitHub login button not found"}
+            # 第二步：获取 GitHub OAuth 参数
+            logger.info(f"🔑 [{self.auth_config.username}] 获取 GitHub OAuth 参数...")
+            oauth_params = await self._get_github_oauth_params(cookies_dict)
+            if not oauth_params:
+                return {"success": False, "error": "Failed to get GitHub OAuth parameters"}
 
-            await github_button.click()
-            await page.wait_for_load_state("networkidle", timeout=15000)
+            client_id = oauth_params["client_id"]
+            auth_state = oauth_params["auth_state"]
 
-            if "github.com" in page.url:
+            # 第三步：构造 GitHub OAuth URL 并直接访问
+            oauth_url = f"https://github.com/login/oauth/authorize?response_type=code&client_id={client_id}&state={auth_state}&scope=user:email"
+            logger.info(f"🔗 [{self.auth_config.username}] 访问 GitHub OAuth URL...")
+            
+            await page.goto(oauth_url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            # 第四步：检查是否需要登录 GitHub
+            current_url = page.url
+            logger.info(f"🔍 [{self.auth_config.username}] 当前URL: {current_url}")
+
+            if "github.com/login" in current_url:
+                # 需要登录
+                logger.info(f"🔐 [{self.auth_config.username}] 需要登录到 GitHub...")
+                
                 username_input = await page.query_selector('input[name="login"]')
                 password_input = await page.query_selector('input[name="password"]')
 
                 if username_input and password_input:
                     await username_input.fill(self.auth_config.username)
+                    await page.wait_for_timeout(500)
+                    
                     error = await self._fill_password(password_input)
                     if error:
                         return {"success": False, "error": error}
+                    
+                    await page.wait_for_timeout(500)
 
                     submit_button = await page.query_selector('input[type="submit"]')
                     if submit_button:
                         await submit_button.click()
-                        await page.wait_for_load_state("networkidle", timeout=15000)
+                        logger.info(f"✅ [{self.auth_config.username}] 点击登录按钮")
+                        await page.wait_for_timeout(3000)
 
-                if "two-factor" in page.url or "2fa" in page.url.lower():
-                    logger.info("🔐 GitHub 2FA required")
+                # 检查是否需要 2FA
+                await page.wait_for_timeout(2000)
+                current_url = page.url
+                if "two-factor" in current_url or "2fa" in current_url.lower():
+                    logger.info("🔐 GitHub 需要 2FA 认证")
                     if not await self._handle_2fa(page):
                         return {"success": False, "error": "2FA authentication failed"}
 
-                authorize_button = await page.query_selector('button[name="authorize"]')
-                if authorize_button:
-                    await authorize_button.click()
-                    await page.wait_for_load_state("networkidle", timeout=10000)
+            # 第五步：检查是否需要授权
+            await page.wait_for_timeout(2000)
+            current_url = page.url
+            
+            if "github.com/login/oauth/authorize" in current_url:
+                logger.info(f"🔑 [{self.auth_config.username}] 需要授权应用...")
+                try:
+                    authorize_button = await page.query_selector('button[name="authorize"]')
+                    if authorize_button:
+                        await authorize_button.click()
+                        logger.info(f"✅ [{self.auth_config.username}] 点击授权按钮")
+                        await page.wait_for_timeout(2000)
+                except Exception as e:
+                    logger.warning(f"⚠️ [{self.auth_config.username}] 点击授权按钮失败: {e}")
 
-            # 等待OAuth回调到 /oauth/ 路径
+            # 第六步：等待OAuth回调
             logger.info(f"⏳ [{self.auth_config.username}] 等待OAuth回调...")
-            await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=30000)
+            try:
+                await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=30000)
+            except Exception as e:
+                logger.warning(f"⚠️ [{self.auth_config.username}] OAuth回调等待超时，检查当前URL...")
+                current_url = page.url
+                if "/oauth/" in current_url:
+                    logger.info(f"✅ [{self.auth_config.username}] 已在OAuth回调页面")
+                else:
+                    return {"success": False, "error": f"OAuth callback timeout: {sanitize_exception(e)}"}
 
             # 等待cookies传播完成
             logger.info(f"🔄 [{self.auth_config.username}] OAuth回调完成，等待cookies设置...")
@@ -715,7 +828,13 @@ class LinuxDoAuthenticator(Authenticator):
                 response = await client.get(self.provider_config.get_status_url(), headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    try:
+                        data = response.json()
+                    except Exception as e:
+                        logger.error(f"❌ [{self.auth_config.username}] 解析 status API 响应失败: {e}")
+                        logger.info(f"   响应内容: {response.text[:200]}")
+                        return None
+                    
                     if data.get("success"):
                         status_data = data.get("data", {})
 
@@ -731,8 +850,13 @@ class LinuxDoAuthenticator(Authenticator):
                         else:
                             logger.error(f"❌ [{self.auth_config.username}] LinuxDO client_id 为空")
                             return None
+                    else:
+                        error_msg = data.get("message", "Unknown error")
+                        logger.error(f"❌ [{self.auth_config.username}] status API 返回失败: {error_msg}")
+                        return None
                 else:
                     logger.error(f"❌ [{self.auth_config.username}] 获取 client_id 失败: HTTP {response.status_code}")
+                    logger.info(f"   响应内容: {response.text[:200]}")
                     return None
         except Exception as e:
             logger.error(f"❌ [{self.auth_config.username}] 获取 client_id 异常: {e}")
