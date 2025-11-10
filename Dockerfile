@@ -31,8 +31,9 @@ RUN playwright install chromium && \
 # 复制应用代码
 COPY . .
 
-# 设置目录权限
-RUN chown -R appuser:appuser /app
+# 创建缓存目录
+RUN mkdir -p /app/.cache/sessions && \
+    chown -R appuser:appuser /app
 
 # 切换到非 root 用户
 USER appuser
@@ -40,6 +41,7 @@ USER appuser
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # 健康检查
 HEALTHCHECK --interval=6h --timeout=30s --start-period=10s --retries=3 \

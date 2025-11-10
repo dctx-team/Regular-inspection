@@ -1,0 +1,58 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Claude Code
+.claude
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+dist
+build
+
+# Virtual environments
+venv
+env
+ENV
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Logs
+*.log
+logs
+
+# Cache
+.cache
+*.tmp
+
+# Environment
+.env.example
+.env.local
+
+# Documentation
+README*.md
+CHANGELOG.md
+docs/
+
+# CI/CD
+.github
+.gitlab-ci.yml
+
+# Data files (will be mounted as volumes)
+balance_data.json
+balance_hash.txt
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
