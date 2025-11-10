@@ -571,6 +571,10 @@ class EmailAuthenticator(Authenticator):
 
 class GitHubAuthenticator(Authenticator):
     """GitHub OAuth 认证"""
+    
+    def _should_skip_in_ci(self) -> bool:
+        """检查是否应该在 CI 环境中跳过 GitHub 认证"""
+        return CIConfig.should_skip_auth_method("github")
 
     async def _get_github_oauth_params(self, cookies: Dict[str, str], page: Page = None) -> Optional[Dict[str, Any]]:
         """获取 GitHub OAuth 参数（client_id 和 auth_state）"""
@@ -737,6 +741,14 @@ class GitHubAuthenticator(Authenticator):
         """使用 GitHub 登录"""
         try:
             logger.info(f"ℹ️ Starting GitHub authentication")
+            
+            # 检查是否在 CI 环境中应该跳过
+            if self._should_skip_in_ci():
+                logger.warning(f"⚠️ [{self.auth_config.username}] CI 环境已配置跳过 GitHub 认证")
+                return {
+                    "success": False,
+                    "error": "GitHub authentication skipped in CI environment (configured via CI_DISABLED_AUTH_METHODS)"
+                }
 
             # 尝试加载缓存的会话
             cache_data = session_cache.load(self.account_name, self.provider_config.name)
@@ -1003,6 +1015,10 @@ class GitHubAuthenticator(Authenticator):
 
 class LinuxDoAuthenticator(Authenticator):
     """Linux.do OAuth 认证"""
+    
+    def _should_skip_in_ci(self) -> bool:
+        """检查是否应该在 CI 环境中跳过 Linux.do 认证"""
+        return CIConfig.should_skip_auth_method("linux.do")
 
     async def _get_auth_client_id(self, cookies: Dict[str, str], page: Page = None) -> Optional[Dict[str, Any]]:
         """获取 LinuxDO OAuth 客户端 ID"""
@@ -1165,6 +1181,14 @@ class LinuxDoAuthenticator(Authenticator):
         """使用 Linux.do 登录"""
         try:
             logger.info(f"ℹ️ Starting Linux.do authentication")
+            
+            # 检查是否在 CI 环境中应该跳过
+            if self._should_skip_in_ci():
+                logger.warning(f"⚠️ [{self.auth_config.username}] CI 环境已配置跳过 Linux.do 认证")
+                return {
+                    "success": False,
+                    "error": "Linux.do authentication skipped in CI environment (configured via CI_DISABLED_AUTH_METHODS)"
+                }
 
             # 尝试加载缓存的会话
             cache_data = session_cache.load(self.account_name, self.provider_config.name)
