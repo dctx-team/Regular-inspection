@@ -19,6 +19,7 @@ from playwright.async_api import async_playwright, Page, BrowserContext
 from utils.config import AccountConfig, ProviderConfig, AuthConfig
 from utils.auth import get_authenticator
 from utils.logger import setup_logger
+from utils.session_cache import SessionCache
 from utils.constants import (
     DEFAULT_USER_AGENT,
     BROWSER_USER_AGENT,
@@ -67,6 +68,7 @@ class CheckIn:
         self.balance_data_file = "balance_data.json"
         self.logger = setup_logger(__name__)
         self._playwright = None
+        self.session_cache = SessionCache()  # 添加会话缓存实例
 
     async def __aenter__(self):
         """进入上下文时初始化浏览器"""
@@ -133,6 +135,60 @@ class CheckIn:
 
     async def _checkin_with_auth(self, auth_config: AuthConfig) -> Tuple[bool, Optional[Dict]]:
         """使用指定的认证方式进行签到"""
+        # ======== 优先尝试使用会话缓存（跳过认证流程） ========
+        cache_data = self.session_cache.load(self.account.name, self.provider.name)
+        if cache_data:
+            self.logger.info(f"🔄 [{self.account.name}] 检测到会话缓存，尝试直接使用...")
+            try:
+                cached_cookies_list = cache_data.get("cookies", [])
+                if cached_cookies_list:
+                    # 转换为字典格式供 httpx 使用
+                    cached_cookies = {cookie["name"]: cookie["value"] for cookie in cached_cookies_list}
+                    user_id = cache_data.get("user_id")
+
+                    # 创建临时 auth_config 用于 API 请求
+                    temp_auth_config = AuthConfig(
+                        method=auth_config.method,
+                        username=auth_config.username,
+                        password=auth_config.password,
+                        cookies=auth_config.cookies,
+                        api_user=user_id or auth_config.api_user
+                    )
+
+                    self.logger.info(f"✅ [{self.account.name}] 使用缓存会话进行签到（跳过浏览器认证）")
+
+                    # 尝试直接签到
+                    if self.provider.name.lower() == "agentrouter":
+                        user_info = await self._get_user_info(cached_cookies, temp_auth_config)
+                    else:
+                        checkin_result = await self._do_checkin(cached_cookies, temp_auth_config)
+                        if checkin_result["success"]:
+                            user_info = await self._get_user_info(cached_cookies, temp_auth_config)
+                        else:
+                            raise Exception(f"Checkin failed: {checkin_result.get('message')}")
+
+                    if user_info and user_info.get("success"):
+                        # 计算余额变化
+                        balance_change = self._calculate_balance_change(
+                            self.account.name,
+                            auth_config.method,
+                            user_info
+                        )
+                        user_info["balance_change"] = balance_change
+                        self._save_balance_data(self.account.name, auth_config.method, user_info)
+
+                        self.logger.info(f"✅ [{self.account.name}] 缓存会话有效，签到成功")
+                        return True, user_info
+                    else:
+                        raise Exception("User info request failed with cached session")
+
+            except Exception as e:
+                self.logger.warning(f"⚠️ [{self.account.name}] 缓存会话无效或已过期: {e}")
+                self.logger.info(f"ℹ️ [{self.account.name}] 继续执行完整认证流程...")
+                # 删除无效缓存
+                self.session_cache.delete(self.account.name, self.provider.name)
+
+        # ======== 原有的完整认证流程 ========
         # 检测是否在 CI 环境中（GitHub Actions、GitLab CI 等）
         is_ci = os.getenv("CI", "false").lower() == "true" or os.getenv("GITHUB_ACTIONS", "false").lower() == "true"
         
