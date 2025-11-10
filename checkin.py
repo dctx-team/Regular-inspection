@@ -136,6 +136,16 @@ class CheckIn:
         # 检测是否在 CI 环境中（GitHub Actions、GitLab CI 等）
         is_ci = os.getenv("CI", "false").lower() == "true" or os.getenv("GITHUB_ACTIONS", "false").lower() == "true"
         
+        # 在CI环境中，如果是需要人机验证的方式，提前警告并可能跳过
+        if is_ci and auth_config.method in ["github", "linux.do"]:
+            # 检查是否设置了跳过标志
+            skip_interactive = os.getenv("SKIP_INTERACTIVE_AUTH", "false").lower() == "true"
+            if skip_interactive:
+                self.logger.warning(f"⚠️ [{self.account.name}] CI环境跳过 {auth_config.method} 认证（需要人机验证）")
+                return False, None
+            else:
+                self.logger.warning(f"⚠️ [{self.account.name}] CI环境中的 {auth_config.method} 认证可能失败（需要人机验证）")
+        
         # 为每次认证创建独立的临时目录和浏览器上下文
         with tempfile.TemporaryDirectory() as temp_dir:
             # 对于需要人机验证的登录方式（GitHub、Linux.do），使用非headless模式
