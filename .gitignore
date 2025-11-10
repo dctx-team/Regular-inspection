@@ -54,3 +54,4 @@ htmlcov/
 
 # Docker
 *.tar
+.claude/settings.local.json
