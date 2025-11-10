@@ -584,6 +584,87 @@ class GitHubAuthenticator(Authenticator):
                 self.provider_config.api_user_key: "-1"
             }
 
+            # 优先尝试通过浏览器获取（绕过 Cloudflare）
+            if page:
+                logger.info(f"🌐 [{self.auth_config.username}] 尝试通过浏览器直接获取 OAuth 参数...")
+                try:
+                    # 使用浏览器的 evaluate 来发送 API 请求，这样可以使用浏览器的 Cloudflare cookies
+                    oauth_result = await page.evaluate(f"""
+                        async () => {{
+                            try {{
+                                // 获取 status
+                                const statusRes = await fetch('{self.provider_config.get_status_url()}', {{
+                                    method: 'GET',
+                                    headers: {{
+                                        'Accept': 'application/json',
+                                        '{self.provider_config.api_user_key}': '-1'
+                                    }},
+                                    credentials: 'include'
+                                }});
+                                
+                                if (!statusRes.ok) {{
+                                    return {{ success: false, error: `Status HTTP ${{statusRes.status}}` }};
+                                }}
+                                
+                                const statusData = await statusRes.json();
+                                if (!statusData.success || !statusData.data) {{
+                                    return {{ success: false, error: 'Status API returned failure' }};
+                                }}
+                                
+                                const githubEnabled = statusData.data.github_oauth || false;
+                                const clientId = statusData.data.github_client_id || '';
+                                
+                                if (!githubEnabled || !clientId) {{
+                                    return {{ success: false, error: 'GitHub OAuth not enabled or client_id empty' }};
+                                }}
+                                
+                                // 获取 auth_state
+                                const stateRes = await fetch('{self.provider_config.get_auth_state_url()}', {{
+                                    method: 'GET',
+                                    headers: {{
+                                        'Accept': 'application/json',
+                                        '{self.provider_config.api_user_key}': '-1'
+                                    }},
+                                    credentials: 'include'
+                                }});
+                                
+                                if (!stateRes.ok) {{
+                                    return {{ success: false, error: `State HTTP ${{stateRes.status}}` }};
+                                }}
+                                
+                                const stateData = await stateRes.json();
+                                if (!stateData.success || !stateData.data) {{
+                                    return {{ success: false, error: 'State API returned failure' }};
+                                }}
+                                
+                                return {{ 
+                                    success: true, 
+                                    client_id: clientId,
+                                    auth_state: stateData.data
+                                }};
+                            }} catch (e) {{
+                                return {{ success: false, error: e.toString() }};
+                            }}
+                        }}
+                    """)
+                    
+                    if oauth_result and oauth_result.get('success'):
+                        client_id = oauth_result.get('client_id')
+                        auth_state = oauth_result.get('auth_state')
+                        logger.info(f"✅ [{self.auth_config.username}] 通过浏览器获取到 OAuth 参数")
+                        logger.info(f"   client_id: {client_id}")
+                        logger.info(f"   auth_state: {auth_state}")
+                        return {
+                            "client_id": client_id,
+                            "auth_state": auth_state
+                        }
+                    else:
+                        error_msg = oauth_result.get('error', 'Unknown error') if oauth_result else 'No result'
+                        logger.warning(f"⚠️ [{self.auth_config.username}] 浏览器方式失败: {error_msg}，回退到 httpx")
+                except Exception as browser_error:
+                    logger.warning(f"⚠️ [{self.auth_config.username}] 浏览器 API 请求异常: {browser_error}，回退到 httpx")
+
+            # 回退到 httpx 方式
             async with httpx.AsyncClient(cookies=cookies, timeout=30.0, verify=True) as client:
                 # 获取 client_id
                 status_response = await client.get(self.provider_config.get_status_url(), headers=headers)
@@ -600,48 +681,9 @@ class GitHubAuthenticator(Authenticator):
                     if 'text/html' in content_type:
                         logger.error(f"❌ [{self.auth_config.username}] API 返回 HTML 而非 JSON，可能是 Cloudflare 验证页面")
                         logger.info(f"   响应内容片段: {status_response.text[:300]}")
-                        
-                        # 如果提供了 page 对象，尝试通过浏览器执行 API 请求
-                        if page:
-                            logger.warning(f"⚠️ [{self.auth_config.username}] 尝试通过浏览器执行 API 请求以绕过 Cloudflare...")
-                            try:
-                                # 使用浏览器的 evaluate 来发送 API 请求，这样可以使用浏览器的 Cloudflare cookies
-                                status_result = await page.evaluate(f"""
-                                    async () => {{
-                                        try {{
-                                            const response = await fetch('{self.provider_config.get_status_url()}', {{
-                                                method: 'GET',
-                                                headers: {{
-                                                    'Accept': 'application/json',
-                                                    '{self.provider_config.api_user_key}': '-1'
-                                                }},
-                                                credentials: 'include'
-                                            }});
-                                            if (!response.ok) {{
-                                                return {{ success: false, error: `HTTP ${{response.status}}` }};
-                                            }}
-                                            const data = await response.json();
-                                            return {{ success: true, data: data }};
-                                        }} catch (e) {{
-                                            return {{ success: false, error: e.toString() }};
-                                        }}
-                                    }}
-                                """)
-                                
-                                if status_result and status_result.get('success'):
-                                    status_data = status_result.get('data')
-                                    logger.info(f"✅ [{self.auth_config.username}] 通过浏览器成功获取 API 响应")
-                                else:
-                                    logger.error(f"❌ [{self.auth_config.username}] 浏览器 API 请求也失败: {status_result.get('error')}")
-                                    return None
-                            except Exception as browser_error:
-                                logger.error(f"❌ [{self.auth_config.username}] 浏览器 API 请求异常: {browser_error}")
-                                return None
-                        else:
-                            return None
                     else:
                         logger.info(f"   响应内容: {status_response.text[:200]}")
-                        return None
+                    return None
 
                 if not status_data.get("success"):
                     logger.error(f"❌ [{self.auth_config.username}] status API 返回失败")
@@ -744,22 +786,33 @@ class GitHubAuthenticator(Authenticator):
             for retry in range(max_retries):
                 logger.info(f"🔑 [{self.auth_config.username}] 获取 GitHub OAuth 参数... (尝试 {retry + 1}/{max_retries})")
                 
-                # 每次重试前等待递增的时间
+                # 每次重试前等待递增的时间，并采取不同的策略
                 if retry > 0:
-                    wait_time = 5000 * retry  # 5s, 10s
+                    wait_time = 10000 * retry  # 10s, 20s (增加等待时间)
                     logger.info(f"⏳ 等待 {wait_time/1000}秒 后重试...")
                     await page.wait_for_timeout(wait_time)
                     
-                    # 重新访问登录页面刷新cookies
-                    try:
-                        await page.goto(
-                            self.provider_config.get_login_url(),
-                            wait_until="domcontentloaded",
-                            timeout=30000
-                        )
-                        await page.wait_for_timeout(5000)
-                    except Exception as e:
-                        logger.warning(f"⚠️ [{self.auth_config.username}] 重新访问登录页失败: {e}")
+                    # 策略1：刷新页面
+                    if retry == 1:
+                        try:
+                            logger.info(f"🔄 [{self.auth_config.username}] 刷新页面尝试...")
+                            await page.reload(wait_until="domcontentloaded", timeout=30000)
+                            await page.wait_for_timeout(5000)
+                        except Exception as e:
+                            logger.warning(f"⚠️ [{self.auth_config.username}] 刷新页面失败: {e}")
+                    
+                    # 策略2：重新访问登录页
+                    elif retry == 2:
+                        try:
+                            logger.info(f"🔄 [{self.auth_config.username}] 重新访问登录页...")
+                            await page.goto(
+                                self.provider_config.get_login_url(),
+                                wait_until="domcontentloaded",
+                                timeout=30000
+                            )
+                            await page.wait_for_timeout(10000)  # 增加到10秒
+                        except Exception as e:
+                            logger.warning(f"⚠️ [{self.auth_config.username}] 重新访问登录页失败: {e}")
                 
                 # 获取最新cookies
                 current_cookies = await context.cookies()
@@ -773,23 +826,7 @@ class GitHubAuthenticator(Authenticator):
                 elif retry < max_retries - 1:
                     logger.warning(f"⚠️ [{self.auth_config.username}] 第 {retry + 1} 次尝试失败，继续重试...")
                 else:
-                    # 最后一次尝试：通过浏览器访问API
-                    logger.warning(f"⚠️ [{self.auth_config.username}] 常规方法失败，尝试通过浏览器访问 API...")
-                    try:
-                        status_url = self.provider_config.get_status_url()
-                        logger.info(f"🌐 [{self.auth_config.username}] 浏览器访问: {status_url}")
-                        await page.goto(status_url, wait_until="domcontentloaded", timeout=45000)
-                        # 增加等待时间以确保Cloudflare验证完成 (增加到10秒)
-                        await page.wait_for_timeout(10000)
-                        
-                        # 重新获取 cookies
-                        retry_cookies = await context.cookies()
-                        retry_cookies_dict = {cookie["name"]: cookie["value"] for cookie in retry_cookies}
-                        logger.info(f"🍪 [{self.auth_config.username}] 重新获取到 {len(retry_cookies_dict)} 个cookies")
-                        
-                        oauth_params = await self._get_github_oauth_params(retry_cookies_dict, page)
-                    except Exception as browser_error:
-                        logger.error(f"❌ [{self.auth_config.username}] 浏览器访问失败: {browser_error}")
+                    logger.error(f"❌ [{self.auth_config.username}] 所有重试均失败")
 
             if not oauth_params:
                 return {"success": False, "error": f"Failed to get GitHub OAuth parameters after {max_retries} retries"}
@@ -979,6 +1016,51 @@ class LinuxDoAuthenticator(Authenticator):
                 self.provider_config.api_user_key: "-1"  # 使用-1表示未登录用户
             }
 
+            # 优先尝试通过浏览器获取（绕过 Cloudflare）
+            if page:
+                logger.info(f"🌐 [{self.auth_config.username}] 尝试通过浏览器直接获取 client_id...")
+                try:
+                    # 使用浏览器的 evaluate 来发送 API 请求
+                    status_result = await page.evaluate(f"""
+                        async () => {{
+                            try {{
+                                const response = await fetch('{self.provider_config.get_status_url()}', {{
+                                    method: 'GET',
+                                    headers: {{
+                                        'Accept': 'application/json',
+                                        '{self.provider_config.api_user_key}': '-1'
+                                    }},
+                                    credentials: 'include'
+                                }});
+                                if (!response.ok) {{
+                                    return {{ success: false, error: `HTTP ${{response.status}}` }};
+                                }}
+                                const data = await response.json();
+                                return {{ success: true, data: data }};
+                            }} catch (e) {{
+                                return {{ success: false, error: e.toString() }};
+                            }}
+                        }}
+                    """)
+                    
+                    if status_result and status_result.get('success'):
+                        data = status_result.get('data')
+                        logger.info(f"✅ [{self.auth_config.username}] 通过浏览器成功获取 API 响应")
+                        
+                        if data.get("success"):
+                            status_data = data.get("data", {})
+                            if status_data.get("linuxdo_oauth", False):
+                                client_id = status_data.get("linuxdo_client_id", "")
+                                if client_id:
+                                    logger.info(f"✅ [{self.auth_config.username}] 获取到 LinuxDO client_id: {client_id}")
+                                    return {"client_id": client_id}
+                    
+                    error_msg = status_result.get('error', 'Unknown error') if status_result else 'No result'
+                    logger.warning(f"⚠️ [{self.auth_config.username}] 浏览器方式失败: {error_msg}，回退到 httpx")
+                except Exception as browser_error:
+                    logger.warning(f"⚠️ [{self.auth_config.username}] 浏览器 API 请求异常: {browser_error}，回退到 httpx")
+
+            # 回退到 httpx 方式
             async with httpx.AsyncClient(cookies=cookies, timeout=30.0, verify=True) as client:
                 response = await client.get(self.provider_config.get_status_url(), headers=headers)
 
@@ -993,50 +1075,10 @@ class LinuxDoAuthenticator(Authenticator):
                             logger.error(f"❌ [{self.auth_config.username}] API 返回 HTML 而非 JSON，可能是 Cloudflare 验证页面")
                             # 检查是否包含 Cloudflare 标记
                             if 'cloudflare' in response.text.lower() or 'verification' in response.text.lower():
-                                logger.error(f"❌ [{self.auth_config.username}] 确认是 Cloudflare 验证页面，需要先通过浏览器访问")
-                            
-                            # 如果提供了 page 对象，尝试通过浏览器执行 API 请求
-                            if page:
-                                logger.warning(f"⚠️ [{self.auth_config.username}] 尝试通过浏览器执行 API 请求以绕过 Cloudflare...")
-                                try:
-                                    # 使用浏览器的 evaluate 来发送 API 请求
-                                    status_result = await page.evaluate(f"""
-                                        async () => {{
-                                            try {{
-                                                const response = await fetch('{self.provider_config.get_status_url()}', {{
-                                                    method: 'GET',
-                                                    headers: {{
-                                                        'Accept': 'application/json',
-                                                        '{self.provider_config.api_user_key}': '-1'
-                                                    }},
-                                                    credentials: 'include'
-                                                }});
-                                                if (!response.ok) {{
-                                                    return {{ success: false, error: `HTTP ${{response.status}}` }};
-                                                }}
-                                                const data = await response.json();
-                                                return {{ success: true, data: data }};
-                                            }} catch (e) {{
-                                                return {{ success: false, error: e.toString() }};
-                                            }}
-                                        }}
-                                    """)
-                                    
-                                    if status_result and status_result.get('success'):
-                                        data = status_result.get('data')
-                                        logger.info(f"✅ [{self.auth_config.username}] 通过浏览器成功获取 API 响应")
-                                    else:
-                                        logger.error(f"❌ [{self.auth_config.username}] 浏览器 API 请求也失败: {status_result.get('error')}")
-                                        return None
-                                except Exception as browser_error:
-                                    logger.error(f"❌ [{self.auth_config.username}] 浏览器 API 请求异常: {browser_error}")
-                                    return None
-                            else:
-                                logger.info(f"   响应内容: {response.text[:200]}")
-                                return None
+                                logger.error(f"❌ [{self.auth_config.username}] 确认是 Cloudflare 验证页面")
                         else:
                             logger.info(f"   响应内容: {response.text[:200]}")
-                            return None
+                        return None
                     
                     if data.get("success"):
                         status_data = data.get("data", {})
@@ -1172,22 +1214,33 @@ class LinuxDoAuthenticator(Authenticator):
             for retry in range(max_retries):
                 logger.info(f"🔑 [{self.auth_config.username}] 获取 LinuxDO OAuth client_id... (尝试 {retry + 1}/{max_retries})")
                 
-                # 每次重试前等待递增的时间
+                # 每次重试前等待递增的时间，并采取不同的策略
                 if retry > 0:
-                    wait_time = 5000 * retry  # 5s, 10s
+                    wait_time = 10000 * retry  # 10s, 20s (增加等待时间)
                     logger.info(f"⏳ 等待 {wait_time/1000}秒 后重试...")
                     await page.wait_for_timeout(wait_time)
                     
-                    # 重新访问登录页面刷新cookies
-                    try:
-                        await page.goto(
-                            self.provider_config.get_login_url(),
-                            wait_until="domcontentloaded",
-                            timeout=30000
-                        )
-                        await page.wait_for_timeout(5000)
-                    except Exception as e:
-                        logger.warning(f"⚠️ [{self.auth_config.username}] 重新访问登录页失败: {e}")
+                    # 策略1：刷新页面
+                    if retry == 1:
+                        try:
+                            logger.info(f"🔄 [{self.auth_config.username}] 刷新页面尝试...")
+                            await page.reload(wait_until="domcontentloaded", timeout=30000)
+                            await page.wait_for_timeout(5000)
+                        except Exception as e:
+                            logger.warning(f"⚠️ [{self.auth_config.username}] 刷新页面失败: {e}")
+                    
+                    # 策略2：重新访问登录页
+                    elif retry == 2:
+                        try:
+                            logger.info(f"🔄 [{self.auth_config.username}] 重新访问登录页...")
+                            await page.goto(
+                                self.provider_config.get_login_url(),
+                                wait_until="domcontentloaded",
+                                timeout=30000
+                            )
+                            await page.wait_for_timeout(10000)  # 增加到10秒
+                        except Exception as e:
+                            logger.warning(f"⚠️ [{self.auth_config.username}] 重新访问登录页失败: {e}")
                 
                 # 获取最新cookies
                 current_cookies = await context.cookies()
@@ -1201,50 +1254,7 @@ class LinuxDoAuthenticator(Authenticator):
                 elif retry < max_retries - 1:
                     logger.warning(f"⚠️ [{self.auth_config.username}] 第 {retry + 1} 次尝试失败，继续重试...")
                 else:
-                    # 最后一次尝试：通过浏览器访问API
-                    logger.warning(f"⚠️ [{self.auth_config.username}] 常规方法失败，尝试通过浏览器访问 API...")
-                    try:
-                        status_url = self.provider_config.get_status_url()
-                        logger.info(f"🌐 [{self.auth_config.username}] 浏览器访问: {status_url}")
-                        
-                        # 多次尝试让Cloudflare验证通过
-                        for browser_attempt in range(3):
-                            try:
-                                logger.info(f"   🔄 浏览器访问尝试 {browser_attempt + 1}/3...")
-                                await page.goto(status_url, wait_until="domcontentloaded", timeout=60000)
-                                
-                                # 检查是否是Cloudflare验证页面
-                                page_content = await page.content()
-                                if "verification" in page_content.lower() or "cloudflare" in page_content.lower():
-                                    logger.warning(f"   ⚠️ 检测到Cloudflare验证页面，等待验证完成...")
-                                    await page.wait_for_timeout(30000)  # 等待30秒
-                                    
-                                    # 再次检查
-                                    current_content = await page.content()
-                                    if "verification" not in current_content.lower():
-                                        logger.info(f"   ✅ Cloudflare验证已通过")
-                                        break
-                                else:
-                                    logger.info(f"   ✅ 页面加载成功（无验证）")
-                                    await page.wait_for_timeout(10000)
-                                    break
-                                    
-                                if browser_attempt < 2:
-                                    logger.warning(f"   ⚠️ 验证尚未完成，{10}秒后重试...")
-                                    await page.wait_for_timeout(10000)
-                            except Exception as nav_error:
-                                logger.warning(f"   ⚠️ 导航失败: {nav_error}")
-                                if browser_attempt < 2:
-                                    await page.wait_for_timeout(10000)
-                        
-                        # 重新获取 cookies
-                        retry_cookies = await context.cookies()
-                        retry_cookies_dict = {cookie["name"]: cookie["value"] for cookie in retry_cookies}
-                        logger.info(f"🍪 [{self.auth_config.username}] 重新获取到 {len(retry_cookies_dict)} 个cookies")
-                        
-                        client_id_result = await self._get_auth_client_id(retry_cookies_dict, page)
-                    except Exception as browser_error:
-                        logger.error(f"❌ [{self.auth_config.username}] 浏览器访问失败: {browser_error}")
+                    logger.error(f"❌ [{self.auth_config.username}] 所有重试均失败")
                 
             if not client_id_result:
                 return {"success": False, "error": f"Failed to get LinuxDO client_id after {max_retries} retries"}
