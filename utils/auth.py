@@ -33,7 +33,8 @@ session_cache = SessionCache()
 class Authenticator(ABC):
     """认证器基类"""
 
-    def __init__(self, auth_config: AuthConfig, provider_config: ProviderConfig):
+    def __init__(self, account_name: str, auth_config: AuthConfig, provider_config: ProviderConfig):
+        self.account_name = account_name
         self.auth_config = auth_config
         self.provider_config = provider_config
 
@@ -696,7 +697,7 @@ class GitHubAuthenticator(Authenticator):
             logger.info(f"ℹ️ Starting GitHub authentication")
 
             # 尝试加载缓存的会话
-            cache_data = session_cache.load(self.auth_config.name, self.provider_config.name)
+            cache_data = session_cache.load(self.account_name, self.provider_config.name)
             if cache_data:
                 logger.info(f"🔄 [{self.auth_config.username}] 尝试使用缓存的会话...")
                 try:
@@ -852,7 +853,7 @@ class GitHubAuthenticator(Authenticator):
             # 保存会话缓存
             try:
                 session_cache.save(
-                    account_name=self.auth_config.name,
+                    account_name=self.account_name,
                     provider=self.provider_config.name,
                     cookies=final_cookies,
                     user_id=user_id,
@@ -1092,7 +1093,7 @@ class LinuxDoAuthenticator(Authenticator):
             logger.info(f"ℹ️ Starting Linux.do authentication")
 
             # 尝试加载缓存的会话
-            cache_data = session_cache.load(self.auth_config.name, self.provider_config.name)
+            cache_data = session_cache.load(self.account_name, self.provider_config.name)
             if cache_data:
                 logger.info(f"🔄 [{self.auth_config.username}] 尝试使用缓存的会话...")
                 try:
@@ -1383,7 +1384,7 @@ class LinuxDoAuthenticator(Authenticator):
             # 保存会话缓存
             try:
                 session_cache.save(
-                    account_name=self.auth_config.name,
+                    account_name=self.account_name,
                     provider=self.provider_config.name,
                     cookies=final_cookies,
                     user_id=user_id,
@@ -1400,15 +1401,15 @@ class LinuxDoAuthenticator(Authenticator):
             return {"success": False, "error": f"Linux.do auth failed: {sanitize_exception(e)}"}
 
 
-def get_authenticator(auth_config: AuthConfig, provider_config: ProviderConfig) -> Authenticator:
+def get_authenticator(account_name: str, auth_config: AuthConfig, provider_config: ProviderConfig) -> Authenticator:
     """获取对应的认证器"""
     if auth_config.method == "cookies":
-        return CookiesAuthenticator(auth_config, provider_config)
+        return CookiesAuthenticator(account_name, auth_config, provider_config)
     elif auth_config.method == "email":
-        return EmailAuthenticator(auth_config, provider_config)
+        return EmailAuthenticator(account_name, auth_config, provider_config)
     elif auth_config.method == "github":
-        return GitHubAuthenticator(auth_config, provider_config)
+        return GitHubAuthenticator(account_name, auth_config, provider_config)
     elif auth_config.method == "linux.do":
-        return LinuxDoAuthenticator(auth_config, provider_config)
+        return LinuxDoAuthenticator(account_name, auth_config, provider_config)
     else:
         raise ValueError(f"Unknown auth method: {auth_config.method}")
