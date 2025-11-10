@@ -157,7 +157,7 @@ class CheckIn:
                     self.logger.info(f"ℹ️ [{self.account.name}] AgentRouter 不需要 WAF cookies，跳过")
 
                 # 步骤 2: 执行认证
-                authenticator = get_authenticator(auth_config, self.provider)
+                authenticator = get_authenticator(self.account.name, auth_config, self.provider)
                 auth_result = await authenticator.authenticate(page, context)
 
                 if not auth_result["success"]:
