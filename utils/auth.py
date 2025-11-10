@@ -557,12 +557,26 @@ class EmailAuthenticator(Authenticator):
                 logger.warning(f"⚠️ [{self.auth_config.username}] 未找到session cookie")
 
             logger.info(f"✅ [{self.auth_config.username}] 邮箱认证完成，获取到 {len(cookies_dict)} 个cookies")
-            
+
             # 优先从localStorage提取用户ID，失败则尝试API
             user_id, username = await self._extract_user_from_localstorage(page)
             if not user_id:
                 logger.info(f"ℹ️ [{self.auth_config.username}] localStorage未获取到用户ID，尝试API")
                 user_id, username = await self._extract_user_info(page, cookies_dict)
+
+            # 保存会话缓存
+            try:
+                session_cache.save(
+                    account_name=self.account_name,
+                    provider=self.provider_config.name,
+                    cookies=final_cookies,
+                    user_id=user_id,
+                    username=username,
+                    expiry_hours=24
+                )
+                logger.info(f"✅ [{self.auth_config.username}] 会话已缓存（24小时有效）")
+            except Exception as cache_error:
+                logger.warning(f"⚠️ [{self.auth_config.username}] 缓存保存失败: {cache_error}")
 
             return {"success": True, "cookies": cookies_dict, "user_id": user_id, "username": username}
 

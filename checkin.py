@@ -135,58 +135,58 @@ class CheckIn:
 
     async def _checkin_with_auth(self, auth_config: AuthConfig) -> Tuple[bool, Optional[Dict]]:
         """使用指定的认证方式进行签到"""
-        # ======== 优先尝试使用会话缓存（跳过认证流程） ========
-        cache_data = self.session_cache.load(self.account.name, self.provider.name)
-        if cache_data:
-            self.logger.info(f"🔄 [{self.account.name}] 检测到会话缓存，尝试直接使用...")
-            try:
-                cached_cookies_list = cache_data.get("cookies", [])
-                if cached_cookies_list:
-                    # 转换为字典格式供 httpx 使用
-                    cached_cookies = {cookie["name"]: cookie["value"] for cookie in cached_cookies_list}
-                    user_id = cache_data.get("user_id")
+        # ======== OAuth/Email 方式：优先使用缓存的 Cookies 进行签到 ========
+        if auth_config.method in ["github", "linux.do", "email"]:
+            cache_data = self.session_cache.load(self.account.name, self.provider.name)
+            if cache_data:
+                auth_type_display = "OAuth" if auth_config.method in ["github", "linux.do"] else "Email"
+                self.logger.info(f"🔄 [{self.account.name}] 检测到 {auth_type_display} 缓存，直接使用 Cookies 签到...")
+                try:
+                    cached_cookies_list = cache_data.get("cookies", [])
+                    if cached_cookies_list:
+                        # 转换为字典格式供 httpx 使用
+                        cached_cookies = {cookie["name"]: cookie["value"] for cookie in cached_cookies_list}
+                        user_id = cache_data.get("user_id")
 
-                    # 创建临时 auth_config 用于 API 请求
-                    temp_auth_config = AuthConfig(
-                        method=auth_config.method,
-                        username=auth_config.username,
-                        password=auth_config.password,
-                        cookies=auth_config.cookies,
-                        api_user=user_id or auth_config.api_user
-                    )
-
-                    self.logger.info(f"✅ [{self.account.name}] 使用缓存会话进行签到（跳过浏览器认证）")
-
-                    # 尝试直接签到
-                    if self.provider.name.lower() == "agentrouter":
-                        user_info = await self._get_user_info(cached_cookies, temp_auth_config)
-                    else:
-                        checkin_result = await self._do_checkin(cached_cookies, temp_auth_config)
-                        if checkin_result["success"]:
-                            user_info = await self._get_user_info(cached_cookies, temp_auth_config)
-                        else:
-                            raise Exception(f"Checkin failed: {checkin_result.get('message')}")
-
-                    if user_info and user_info.get("success"):
-                        # 计算余额变化
-                        balance_change = self._calculate_balance_change(
-                            self.account.name,
-                            auth_config.method,
-                            user_info
+                        # 创建 Cookies 认证配置
+                        cookies_auth_config = AuthConfig(
+                            method="cookies",
+                            cookies=cached_cookies,
+                            api_user=user_id
                         )
-                        user_info["balance_change"] = balance_change
-                        self._save_balance_data(self.account.name, auth_config.method, user_info)
 
-                        self.logger.info(f"✅ [{self.account.name}] 缓存会话有效，签到成功")
-                        return True, user_info
-                    else:
-                        raise Exception("User info request failed with cached session")
+                        self.logger.info(f"✅ [{self.account.name}] 使用缓存 Cookies 签到（跳过浏览器认证）")
 
-            except Exception as e:
-                self.logger.warning(f"⚠️ [{self.account.name}] 缓存会话无效或已过期: {e}")
-                self.logger.info(f"ℹ️ [{self.account.name}] 继续执行完整认证流程...")
-                # 删除无效缓存
-                self.session_cache.delete(self.account.name, self.provider.name)
+                        # 尝试使用 Cookies 签到
+                        if self.provider.name.lower() == "agentrouter":
+                            user_info = await self._get_user_info(cached_cookies, cookies_auth_config)
+                        else:
+                            checkin_result = await self._do_checkin(cached_cookies, cookies_auth_config)
+                            if checkin_result["success"]:
+                                user_info = await self._get_user_info(cached_cookies, cookies_auth_config)
+                            else:
+                                raise Exception(f"Checkin failed: {checkin_result.get('message')}")
+
+                        if user_info and user_info.get("success"):
+                            # 计算余额变化
+                            balance_change = self._calculate_balance_change(
+                                self.account.name,
+                                "cookies",  # 使用 cookies 方式记录
+                                user_info
+                            )
+                            user_info["balance_change"] = balance_change
+                            self._save_balance_data(self.account.name, "cookies", user_info)
+
+                            self.logger.info(f"✅ [{self.account.name}] Cookies 签到成功（来自 {auth_type_display} 缓存）")
+                            return True, user_info
+                        else:
+                            raise Exception("User info request failed with cached cookies")
+
+                except Exception as e:
+                    self.logger.warning(f"⚠️ [{self.account.name}] Cookies 已过期: {e}")
+                    self.logger.info(f"ℹ️ [{self.account.name}] 重新通过 {auth_config.method} 认证获取新的 session...")
+                    # 删除过期缓存
+                    self.session_cache.delete(self.account.name, self.provider.name)
 
         # ======== 原有的完整认证流程 ========
         # 检测是否在 CI 环境中（GitHub Actions、GitLab CI 等）
