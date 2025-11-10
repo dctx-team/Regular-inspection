@@ -13,9 +13,13 @@ services:
     volumes:
       - ./balance_hash.txt:/app/balance_hash.txt
       - ./balance_data.json:/app/balance_data.json
+      - ./.cache:/app/.cache
+      - /dev/shm:/dev/shm
     environment:
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1
+      - CI=false
+      - SKIP_CLOUDFLARE_CHECK=false
     networks:
       - router-net
     logging:
