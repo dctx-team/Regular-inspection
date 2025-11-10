@@ -135,10 +135,23 @@ class CheckIn:
         """使用指定的认证方式进行签到"""
         # 为每次认证创建独立的临时目录和浏览器上下文
         with tempfile.TemporaryDirectory() as temp_dir:
+            # 对于需要人机验证的登录方式（GitHub、Linux.do），使用非headless模式
+            # 这样可以更好地通过Cloudflare等人机验证
+            needs_human_verification = auth_config.method in ["github", "linux.do"]
+            headless_mode = not needs_human_verification
+            
+            # 如果环境变量强制指定，则覆盖默认设置
+            force_non_headless = os.getenv("FORCE_NON_HEADLESS", "false").lower() == "true"
+            if force_non_headless:
+                headless_mode = False
+                self.logger.info(f"ℹ️ [{self.account.name}] 强制使用非headless模式（FORCE_NON_HEADLESS=true）")
+            elif needs_human_verification:
+                self.logger.info(f"ℹ️ [{self.account.name}] {auth_config.method} 认证使用非headless模式")
+            
             # 启动独立的浏览器上下文（使用不同的临时目录防止cookie冲突）
             context = await self._playwright.chromium.launch_persistent_context(
                 user_data_dir=temp_dir,
-                headless=True,
+                headless=headless_mode,
                 user_agent=BROWSER_USER_AGENT,
                 viewport=BROWSER_VIEWPORT,
                 args=BROWSER_LAUNCH_ARGS,
