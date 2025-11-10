@@ -12,6 +12,7 @@ from utils.config import AuthConfig, ProviderConfig
 from utils.logger import setup_logger
 from utils.sanitizer import sanitize_exception
 from utils.session_cache import SessionCache
+from utils.ci_config import CIConfig
 from utils.constants import (
     DEFAULT_USER_AGENT,
     KEY_COOKIE_NAMES,
