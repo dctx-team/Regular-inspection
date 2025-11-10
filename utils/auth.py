@@ -611,6 +611,14 @@ class GitHubAuthenticator(Authenticator):
                                     return {{ success: false, error: `Status HTTP ${{statusRes.status}}` }};
                                 }}
                                 
+                                // 检查响应类型是否为 JSON
+                                const contentType = statusRes.headers.get('content-type');
+                                if (!contentType || !contentType.includes('application/json')) {{
+                                    const text = await statusRes.text();
+                                    const preview = text.substring(0, 100);
+                                    return {{ success: false, error: `Not JSON response (got ${{contentType}}): ${{preview}}` }};
+                                }}
+                                
                                 const statusData = await statusRes.json();
                                 if (!statusData.success || !statusData.data) {{
                                     return {{ success: false, error: 'Status API returned failure' }};
@@ -635,6 +643,14 @@ class GitHubAuthenticator(Authenticator):
                                 
                                 if (!stateRes.ok) {{
                                     return {{ success: false, error: `State HTTP ${{stateRes.status}}` }};
+                                }}
+                                
+                                // 检查响应类型是否为 JSON
+                                const stateContentType = stateRes.headers.get('content-type');
+                                if (!stateContentType || !stateContentType.includes('application/json')) {{
+                                    const text = await stateRes.text();
+                                    const preview = text.substring(0, 100);
+                                    return {{ success: false, error: `State not JSON (got ${{stateContentType}}): ${{preview}}` }};
                                 }}
                                 
                                 const stateData = await stateRes.json();
@@ -723,9 +739,12 @@ class GitHubAuthenticator(Authenticator):
             if not await self._init_page_and_check_cloudflare(page):
                 return {"success": False, "error": "Cloudflare verification timeout"}
 
-            # 第一步：等待额外时间确保 Cloudflare 验证完全通过 (从5秒增加到10秒)
-            logger.info(f"⏳ [{self.auth_config.username}] 等待Cloudflare验证完全通过...")
-            await page.wait_for_timeout(10000)
+            # 第一步：等待额外时间确保 Cloudflare 验证完全通过
+            # 在 CI 环境中增加等待时间
+            is_ci = CIConfig.is_ci_environment()
+            wait_time = 15000 if is_ci else 10000
+            logger.info(f"⏳ [{self.auth_config.username}] 等待Cloudflare验证完全通过（{wait_time/1000}秒）...")
+            await page.wait_for_timeout(wait_time)
             
             # 第二步：获取通过 Cloudflare 验证后的 cookies
             logger.info(f"🔑 [{self.auth_config.username}] 获取初始cookies...")
@@ -783,7 +802,12 @@ class GitHubAuthenticator(Authenticator):
                     logger.error(f"❌ [{self.auth_config.username}] 所有重试均失败")
 
             if not oauth_params:
-                return {"success": False, "error": f"Failed to get GitHub OAuth parameters after {max_retries} retries"}
+                # 在 CI 环境中提供更详细的错误信息
+                is_ci = CIConfig.is_ci_environment()
+                error_msg = f"Failed to get GitHub OAuth parameters after {max_retries} retries"
+                if is_ci:
+                    error_msg += " (CI environment detected - GitHub authentication may require manual cookie setup or disabling via CI_DISABLED_AUTH_METHODS=github)"
+                return {"success": False, "error": error_msg}
 
             client_id = oauth_params["client_id"]
             auth_state = oauth_params["auth_state"]
@@ -993,6 +1017,15 @@ class LinuxDoAuthenticator(Authenticator):
                                 if (!response.ok) {{
                                     return {{ success: false, error: `HTTP ${{response.status}}` }};
                                 }}
+                                
+                                // 检查响应类型是否为 JSON
+                                const contentType = response.headers.get('content-type');
+                                if (!contentType || !contentType.includes('application/json')) {{
+                                    const text = await response.text();
+                                    const preview = text.substring(0, 100);
+                                    return {{ success: false, error: `Not JSON response (got ${{contentType}}): ${{preview}}` }};
+                                }}
+                                
                                 const data = await response.json();
                                 return {{ success: true, data: data }};
                             }} catch (e) {{
@@ -1048,6 +1081,15 @@ class LinuxDoAuthenticator(Authenticator):
                                 if (!response.ok) {{
                                     return {{ success: false, error: `HTTP ${{response.status}}` }};
                                 }}
+                                
+                                // 检查响应类型是否为 JSON
+                                const contentType = response.headers.get('content-type');
+                                if (!contentType || !contentType.includes('application/json')) {{
+                                    const text = await response.text();
+                                    const preview = text.substring(0, 100);
+                                    return {{ success: false, error: `Not JSON response (got ${{contentType}}): ${{preview}}` }};
+                                }}
+                                
                                 const data = await response.json();
                                 return {{ success: true, data: data }};
                             }} catch (e) {{
@@ -1125,9 +1167,12 @@ class LinuxDoAuthenticator(Authenticator):
             if not await self._init_page_and_check_cloudflare(page):
                 return {"success": False, "error": "Cloudflare verification timeout"}
 
-            # 第一步：等待额外时间确保 Cloudflare 验证完全通过 (从5秒增加到10秒)
-            logger.info(f"⏳ [{self.auth_config.username}] 等待Cloudflare验证完全通过...")
-            await page.wait_for_timeout(10000)
+            # 第一步：等待额外时间确保 Cloudflare 验证完全通过
+            # 在 CI 环境中增加等待时间
+            is_ci = CIConfig.is_ci_environment()
+            wait_time = 15000 if is_ci else 10000
+            logger.info(f"⏳ [{self.auth_config.username}] 等待Cloudflare验证完全通过（{wait_time/1000}秒）...")
+            await page.wait_for_timeout(wait_time)
             
             # 第二步：获取通过 Cloudflare 验证后的 cookies
             logger.info(f"🔑 [{self.auth_config.username}] 获取初始cookies...")
@@ -1185,7 +1230,12 @@ class LinuxDoAuthenticator(Authenticator):
                     logger.error(f"❌ [{self.auth_config.username}] 所有重试均失败")
                 
             if not client_id_result:
-                return {"success": False, "error": f"Failed to get LinuxDO client_id after {max_retries} retries"}
+                # 在 CI 环境中提供更详细的错误信息
+                is_ci = CIConfig.is_ci_environment()
+                error_msg = f"Failed to get LinuxDO client_id after {max_retries} retries"
+                if is_ci:
+                    error_msg += " (CI environment detected - Linux.do authentication may require manual setup or disabling via CI_DISABLED_AUTH_METHODS=linux.do)"
+                return {"success": False, "error": error_msg}
 
             client_id = client_id_result["client_id"]
 
