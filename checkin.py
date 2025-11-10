@@ -133,31 +133,51 @@ class CheckIn:
 
     async def _checkin_with_auth(self, auth_config: AuthConfig) -> Tuple[bool, Optional[Dict]]:
         """使用指定的认证方式进行签到"""
+        # 检测是否在 CI 环境中（GitHub Actions、GitLab CI 等）
+        is_ci = os.getenv("CI", "false").lower() == "true" or os.getenv("GITHUB_ACTIONS", "false").lower() == "true"
+        
         # 为每次认证创建独立的临时目录和浏览器上下文
         with tempfile.TemporaryDirectory() as temp_dir:
             # 对于需要人机验证的登录方式（GitHub、Linux.do），使用非headless模式
-            # 这样可以更好地通过Cloudflare等人机验证
+            # 但在 CI 环境中必须使用 headless 模式
             needs_human_verification = auth_config.method in ["github", "linux.do"]
-            headless_mode = not needs_human_verification
             
-            # 如果环境变量强制指定，则覆盖默认设置
-            force_non_headless = os.getenv("FORCE_NON_HEADLESS", "false").lower() == "true"
-            if force_non_headless:
-                headless_mode = False
-                self.logger.info(f"ℹ️ [{self.account.name}] 强制使用非headless模式（FORCE_NON_HEADLESS=true）")
-            elif needs_human_verification:
-                self.logger.info(f"ℹ️ [{self.account.name}] {auth_config.method} 认证使用非headless模式")
+            if is_ci:
+                headless_mode = True
+                self.logger.info(f"ℹ️ [{self.account.name}] 检测到 CI 环境，强制使用 headless 模式")
+            else:
+                headless_mode = not needs_human_verification
+                # 如果环境变量强制指定，则覆盖默认设置
+                force_non_headless = os.getenv("FORCE_NON_HEADLESS", "false").lower() == "true"
+                if force_non_headless:
+                    headless_mode = False
+                    self.logger.info(f"ℹ️ [{self.account.name}] 强制使用非headless模式（FORCE_NON_HEADLESS=true）")
+                elif needs_human_verification:
+                    self.logger.info(f"ℹ️ [{self.account.name}] {auth_config.method} 认证使用非headless模式")
             
             # 启动独立的浏览器上下文（使用不同的临时目录防止cookie冲突）
-            context = await self._playwright.chromium.launch_persistent_context(
-                user_data_dir=temp_dir,
-                headless=headless_mode,
-                user_agent=BROWSER_USER_AGENT,
-                viewport=BROWSER_VIEWPORT,
-                args=BROWSER_LAUNCH_ARGS,
-            )
+            try:
+                context = await self._playwright.chromium.launch_persistent_context(
+                    user_data_dir=temp_dir,
+                    headless=headless_mode,
+                    user_agent=BROWSER_USER_AGENT,
+                    viewport=BROWSER_VIEWPORT,
+                    args=BROWSER_LAUNCH_ARGS,
+                    slow_mo=100 if not is_ci else 0,  # CI 环境不需要减速
+                    timeout=60000,  # 60秒超时
+                )
+                self.logger.info(f"✅ [{self.account.name}] 浏览器上下文启动成功 (headless={headless_mode})")
+            except Exception as e:
+                self.logger.error(f"❌ [{self.account.name}] 浏览器上下文启动失败: {e}")
+                return False, {"error": f"Browser launch failed: {str(e)}"}
 
-            page = await context.new_page()
+            try:
+                page = await context.new_page()
+                self.logger.debug(f"✅ [{self.account.name}] 新页面创建成功")
+            except Exception as e:
+                self.logger.error(f"❌ [{self.account.name}] 创建页面失败: {e}")
+                await context.close()
+                return False, {"error": f"Page creation failed: {str(e)}"}
 
             try:
                 # 步骤 1: 对于 AgentRouter 跳过 WAF cookies
@@ -242,8 +262,19 @@ class CheckIn:
                 return False, {"error": f"Exception during check-in: {str(e)}"}
 
             finally:
-                await page.close()
-                await context.close()
+                # 安全关闭页面和上下文
+                try:
+                    if page and not page.is_closed():
+                        await page.close()
+                        self.logger.debug(f"🔒 [{self.account.name}] 页面已关闭")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ [{self.account.name}] 关闭页面时出现警告: {e}")
+                
+                try:
+                    await context.close()
+                    self.logger.debug(f"🔒 [{self.account.name}] 浏览器上下文已关闭")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ [{self.account.name}] 关闭浏览器上下文时出现警告: {e}")
 
     async def _get_waf_cookies(self, page: Page, context: BrowserContext) -> Dict[str, str]:
         """获取 WAF cookies"""
