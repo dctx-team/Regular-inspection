@@ -665,74 +665,15 @@ class GitHubAuthenticator(Authenticator):
                         }
                     else:
                         error_msg = oauth_result.get('error', 'Unknown error') if oauth_result else 'No result'
-                        logger.warning(f"⚠️ [{self.auth_config.username}] 浏览器方式失败: {error_msg}，回退到 httpx")
+                        logger.error(f"❌ [{self.auth_config.username}] 浏览器方式失败: {error_msg}")
+                        return None
                 except Exception as browser_error:
-                    logger.warning(f"⚠️ [{self.auth_config.username}] 浏览器 API 请求异常: {browser_error}，回退到 httpx")
-
-            # 回退到 httpx 方式
-            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, verify=True) as client:
-                # 获取 client_id
-                status_response = await client.get(self.provider_config.get_status_url(), headers=headers)
-                if status_response.status_code != 200:
-                    logger.error(f"❌ [{self.auth_config.username}] 获取 GitHub client_id 失败: HTTP {status_response.status_code}")
+                    logger.error(f"❌ [{self.auth_config.username}] 浏览器 API 请求异常: {browser_error}")
                     return None
-
-                try:
-                    status_data = status_response.json()
-                except Exception as e:
-                    logger.error(f"❌ [{self.auth_config.username}] 解析 status API 响应失败: {e}")
-                    # 检查是否是 HTML 响应（可能是 Cloudflare 验证页面）
-                    content_type = status_response.headers.get('content-type', '')
-                    if 'text/html' in content_type:
-                        logger.error(f"❌ [{self.auth_config.username}] API 返回 HTML 而非 JSON，可能是 Cloudflare 验证页面")
-                        logger.info(f"   响应内容片段: {status_response.text[:300]}")
-                    else:
-                        logger.info(f"   响应内容: {status_response.text[:200]}")
-                    return None
-
-                if not status_data.get("success"):
-                    logger.error(f"❌ [{self.auth_config.username}] status API 返回失败")
-                    return None
-
-                data = status_data.get("data", {})
-                if not data.get("github_oauth", False):
-                    logger.error(f"❌ [{self.auth_config.username}] GitHub OAuth 未启用")
-                    return None
-
-                client_id = data.get("github_client_id", "")
-                if not client_id:
-                    logger.error(f"❌ [{self.auth_config.username}] GitHub client_id 为空")
-                    return None
-
-                logger.info(f"✅ [{self.auth_config.username}] 获取到 GitHub client_id: {client_id}")
-
-                # 获取 auth_state
-                state_response = await client.get(self.provider_config.get_auth_state_url(), headers=headers)
-                if state_response.status_code != 200:
-                    logger.error(f"❌ [{self.auth_config.username}] 获取 auth_state 失败: HTTP {state_response.status_code}")
-                    return None
-
-                try:
-                    state_data = state_response.json()
-                except Exception as e:
-                    logger.error(f"❌ [{self.auth_config.username}] 解析 auth_state API 响应失败: {e}")
-                    return None
-
-                if not state_data.get("success"):
-                    logger.error(f"❌ [{self.auth_config.username}] auth_state API 返回失败")
-                    return None
-
-                auth_state = state_data.get("data", "")
-                if not auth_state:
-                    logger.error(f"❌ [{self.auth_config.username}] auth_state 为空")
-                    return None
-
-                logger.info(f"✅ [{self.auth_config.username}] 获取到 auth_state")
-
-                return {
-                    "client_id": client_id,
-                    "auth_state": auth_state
-                }
+            
+            # 如果没有 page 对象，返回错误（不再使用 httpx 回退，因为会被 Cloudflare 阻止）
+            logger.error(f"❌ [{self.auth_config.username}] 需要浏览器 page 对象来绕过 Cloudflare，无法使用 httpx")
+            return None
 
         except Exception as e:
             logger.error(f"❌ [{self.auth_config.username}] 获取 GitHub OAuth 参数异常: {e}")
@@ -1073,107 +1014,69 @@ class LinuxDoAuthenticator(Authenticator):
                                     return {"client_id": client_id}
                     
                     error_msg = status_result.get('error', 'Unknown error') if status_result else 'No result'
-                    logger.warning(f"⚠️ [{self.auth_config.username}] 浏览器方式失败: {error_msg}，回退到 httpx")
-                except Exception as browser_error:
-                    logger.warning(f"⚠️ [{self.auth_config.username}] 浏览器 API 请求异常: {browser_error}，回退到 httpx")
-
-            # 回退到 httpx 方式
-            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, verify=True) as client:
-                response = await client.get(self.provider_config.get_status_url(), headers=headers)
-
-                if response.status_code == 200:
-                    try:
-                        data = response.json()
-                    except Exception as e:
-                        logger.error(f"❌ [{self.auth_config.username}] 解析 status API 响应失败: {e}")
-                        # 检查是否是 HTML 响应（可能是 Cloudflare 验证页面）
-                        content_type = response.headers.get('content-type', '')
-                        if 'text/html' in content_type:
-                            logger.error(f"❌ [{self.auth_config.username}] API 返回 HTML 而非 JSON，可能是 Cloudflare 验证页面")
-                            # 检查是否包含 Cloudflare 标记
-                            if 'cloudflare' in response.text.lower() or 'verification' in response.text.lower():
-                                logger.error(f"❌ [{self.auth_config.username}] 确认是 Cloudflare 验证页面")
-                        else:
-                            logger.info(f"   响应内容: {response.text[:200]}")
-                        return None
-                    
-                    if data.get("success"):
-                        status_data = data.get("data", {})
-
-                        # 检查 LinuxDO OAuth 是否启用
-                        if not status_data.get("linuxdo_oauth", False):
-                            logger.error(f"❌ [{self.auth_config.username}] LinuxDO OAuth 未启用")
-                            return None
-
-                        client_id = status_data.get("linuxdo_client_id", "")
-                        if client_id:
-                            logger.info(f"✅ [{self.auth_config.username}] 获取到 LinuxDO client_id: {client_id}")
-                            return {"client_id": client_id}
-                        else:
-                            logger.error(f"❌ [{self.auth_config.username}] LinuxDO client_id 为空")
-                            return None
-                    else:
-                        error_msg = data.get("message", "Unknown error")
-                        logger.error(f"❌ [{self.auth_config.username}] status API 返回失败: {error_msg}")
-                        return None
-                else:
-                    logger.error(f"❌ [{self.auth_config.username}] 获取 client_id 失败: HTTP {response.status_code}")
-                    logger.info(f"   响应内容: {response.text[:200]}")
+                    logger.error(f"❌ [{self.auth_config.username}] 浏览器方式失败: {error_msg}")
                     return None
+                except Exception as browser_error:
+                    logger.error(f"❌ [{self.auth_config.username}] 浏览器 API 请求异常: {browser_error}")
+                    return None
+            
+            # 如果没有 page 对象，返回错误（不再使用 httpx 回退，因为会被 Cloudflare 阻止）
+            logger.error(f"❌ [{self.auth_config.username}] 需要浏览器 page 对象来绕过 Cloudflare，无法使用 httpx")
+            return None
         except Exception as e:
             logger.error(f"❌ [{self.auth_config.username}] 获取 client_id 异常: {e}")
             return None
 
-    async def _get_auth_state(self, cookies: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    async def _get_auth_state(self, cookies: Dict[str, str], page: Page = None) -> Optional[Dict[str, Any]]:
         """获取 OAuth 认证状态"""
         try:
-            import httpx
-            from urllib.parse import urlparse
-
-            headers = {
-                "User-Agent": DEFAULT_USER_AGENT,
-                "Accept": "application/json",
-                "Referer": self.provider_config.base_url,
-                "Origin": self.provider_config.base_url,
-                self.provider_config.api_user_key: "-1"  # 使用-1表示未登录用户
-            }
-
-            async with httpx.AsyncClient(cookies=cookies, timeout=30.0, verify=True) as client:
-                response = await client.get(self.provider_config.get_auth_state_url(), headers=headers)
-
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("success"):
-                        auth_data = data.get("data")
-
-                        # 将 httpx Cookies 转换为 Playwright 格式
-                        playwright_cookies = []
-                        if response.cookies:
-                            parsed_domain = urlparse(self.provider_config.base_url).netloc
-
-                            for cookie in response.cookies.jar:
-                                http_only = cookie.has_nonstandard_attr("httponly")
-                                same_site = cookie.get_nonstandard_attr("samesite", "Lax")
-
-                                playwright_cookies.append({
-                                    "name": cookie.name,
-                                    "value": cookie.value,
-                                    "domain": cookie.domain if cookie.domain else parsed_domain,
-                                    "path": cookie.path,
-                                    "expires": cookie.expires,
-                                    "httpOnly": http_only,
-                                    "secure": cookie.secure,
-                                    "sameSite": same_site
-                                })
-
-                        logger.info(f"✅ [{self.auth_config.username}] 获取到 auth_state: {auth_data}")
-                        return {
-                            "auth_data": auth_data,
-                            "cookies": playwright_cookies
-                        }
-                else:
-                    logger.error(f"❌ [{self.auth_config.username}] 获取 auth_state 失败: HTTP {response.status_code}")
+            # 强制使用浏览器获取（避免 httpx 被 Cloudflare 阻止）
+            if page:
+                logger.info(f"🌐 [{self.auth_config.username}] 通过浏览器直接获取 auth_state...")
+                try:
+                    state_result = await page.evaluate(f"""
+                        async () => {{
+                            try {{
+                                const response = await fetch('{self.provider_config.get_auth_state_url()}', {{
+                                    method: 'GET',
+                                    headers: {{
+                                        'Accept': 'application/json',
+                                        '{self.provider_config.api_user_key}': '-1'
+                                    }},
+                                    credentials: 'include'
+                                }});
+                                if (!response.ok) {{
+                                    return {{ success: false, error: `HTTP ${{response.status}}` }};
+                                }}
+                                const data = await response.json();
+                                return {{ success: true, data: data }};
+                            }} catch (e) {{
+                                return {{ success: false, error: e.toString() }};
+                            }}
+                        }}
+                    """)
+                    
+                    if state_result and state_result.get('success'):
+                        data = state_result.get('data')
+                        if data.get("success"):
+                            auth_data = data.get("data")
+                            logger.info(f"✅ [{self.auth_config.username}] 获取到 auth_state: {auth_data}")
+                            # 浏览器方式不需要额外 cookies，直接返回
+                            return {
+                                "auth_data": auth_data,
+                                "cookies": []  # 浏览器已经有所有需要的 cookies
+                            }
+                    
+                    error_msg = state_result.get('error', 'Unknown error') if state_result else 'No result'
+                    logger.error(f"❌ [{self.auth_config.username}] 浏览器方式失败: {error_msg}")
                     return None
+                except Exception as browser_error:
+                    logger.error(f"❌ [{self.auth_config.username}] 浏览器 API 请求异常: {browser_error}")
+                    return None
+            
+            # 如果没有 page 对象，返回错误
+            logger.error(f"❌ [{self.auth_config.username}] 需要浏览器 page 对象来绕过 Cloudflare，无法使用 httpx")
+            return None
         except Exception as e:
             logger.error(f"❌ [{self.auth_config.username}] 获取 auth_state 异常: {e}")
             return None
@@ -1288,7 +1191,7 @@ class LinuxDoAuthenticator(Authenticator):
 
             # 第三步：获取 auth_state
             logger.info(f"🔑 [{self.auth_config.username}] 获取 OAuth auth_state...")
-            auth_state_result = await self._get_auth_state(cookies_dict)
+            auth_state_result = await self._get_auth_state(cookies_dict, page)
             if not auth_state_result:
                 return {"success": False, "error": "Failed to get OAuth auth_state"}
 
