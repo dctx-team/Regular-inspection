@@ -1206,9 +1206,36 @@ class LinuxDoAuthenticator(Authenticator):
                     try:
                         status_url = self.provider_config.get_status_url()
                         logger.info(f"🌐 [{self.auth_config.username}] 浏览器访问: {status_url}")
-                        await page.goto(status_url, wait_until="domcontentloaded", timeout=45000)
-                        # 增加等待时间以确保Cloudflare验证完成 (增加到10秒)
-                        await page.wait_for_timeout(10000)
+                        
+                        # 多次尝试让Cloudflare验证通过
+                        for browser_attempt in range(3):
+                            try:
+                                logger.info(f"   🔄 浏览器访问尝试 {browser_attempt + 1}/3...")
+                                await page.goto(status_url, wait_until="domcontentloaded", timeout=60000)
+                                
+                                # 检查是否是Cloudflare验证页面
+                                page_content = await page.content()
+                                if "verification" in page_content.lower() or "cloudflare" in page_content.lower():
+                                    logger.warning(f"   ⚠️ 检测到Cloudflare验证页面，等待验证完成...")
+                                    await page.wait_for_timeout(30000)  # 等待30秒
+                                    
+                                    # 再次检查
+                                    current_content = await page.content()
+                                    if "verification" not in current_content.lower():
+                                        logger.info(f"   ✅ Cloudflare验证已通过")
+                                        break
+                                else:
+                                    logger.info(f"   ✅ 页面加载成功（无验证）")
+                                    await page.wait_for_timeout(10000)
+                                    break
+                                    
+                                if browser_attempt < 2:
+                                    logger.warning(f"   ⚠️ 验证尚未完成，{10}秒后重试...")
+                                    await page.wait_for_timeout(10000)
+                            except Exception as nav_error:
+                                logger.warning(f"   ⚠️ 导航失败: {nav_error}")
+                                if browser_attempt < 2:
+                                    await page.wait_for_timeout(10000)
                         
                         # 重新获取 cookies
                         retry_cookies = await context.cookies()
@@ -1273,9 +1300,19 @@ class LinuxDoAuthenticator(Authenticator):
                         await login_button.click()
                         logger.info(f"✅ [{self.auth_config.username}] 点击登录按钮")
                         
-                        # 增加等待时间，处理可能的验证 (从15秒增加到25秒)
+                        # 增加等待时间，处理可能的验证 (从25秒增加到35秒，并分段检测)
                         logger.info(f"⏳ [{self.auth_config.username}] 等待登录完成（可能需要处理验证）...")
-                        await page.wait_for_timeout(25000)  # 增加到25秒，给予更多时间处理验证
+                        
+                        # 分段等待，每5秒检测一次是否已经跳转
+                        for i in range(7):  # 7次检测 = 35秒
+                            await page.wait_for_timeout(5000)
+                            current_check_url = page.url
+                            # 如果已经不在登录页或challenge页，说明可能成功了
+                            if "/login" not in current_check_url and "/challenge" not in current_check_url:
+                                logger.info(f"✅ [{self.auth_config.username}] 检测到URL变化，可能登录成功: {current_check_url}")
+                                break
+                            if i < 6:  # 不是最后一次
+                                logger.info(f"   ⏳ 继续等待... ({(i+1)*5}秒/{35}秒)")
                         
                         # 检查是否有 Cloudflare 验证或其他挑战
                         current_url_after_login = page.url
@@ -1283,16 +1320,20 @@ class LinuxDoAuthenticator(Authenticator):
                         
                         # 检查是否在 challenge 页面
                         if "/challenge" in current_url_after_login or "challenge" in current_url_after_login.lower():
-                            logger.warning(f"⚠️ [{self.auth_config.username}] 检测到验证挑战（challenge页面），等待90秒...")
+                            logger.warning(f"⚠️ [{self.auth_config.username}] 检测到验证挑战（challenge页面），等待120秒...")
                             try:
-                                # 等待授权按钮出现或者URL变化（表示验证通过）- 从60秒增加到90秒
-                                await page.wait_for_url(lambda url: "/challenge" not in url.lower(), timeout=90000)
+                                # 等待授权按钮出现或者URL变化（表示验证通过）- 从90秒增加到120秒
+                                await page.wait_for_url(lambda url: "/challenge" not in url.lower(), timeout=120000)
                                 logger.info(f"✅ [{self.auth_config.username}] 已离开验证挑战页面")
-                                await page.wait_for_timeout(3000)  # 增加到3秒
+                                await page.wait_for_timeout(5000)  # 增加到5秒
                                 current_url_after_login = page.url
                                 logger.info(f"🔍 [{self.auth_config.username}] 新URL: {current_url_after_login}")
                             except:
-                                logger.error(f"❌ [{self.auth_config.username}] 验证挑战超时（90秒）")
+                                logger.error(f"❌ [{self.auth_config.username}] 验证挑战超时（120秒）")
+                                # 在CI环境中，如果超时且是headless模式，提供更友好的错误信息
+                                is_ci = os.getenv("CI", "false").lower() == "true"
+                                if is_ci:
+                                    return {"success": False, "error": "Challenge timeout in CI - Linux.do requires human verification in headless mode"}
                                 return {"success": False, "error": "Challenge verification timeout - may need manual intervention"}
                         
                         # 检查是否仍在登录页面
@@ -1316,8 +1357,13 @@ class LinuxDoAuthenticator(Authenticator):
                                 logger.warning(f"⚠️ [{self.auth_config.username}] 未检测到授权按钮，开始详细检查...")
                                 
                                 # 检查是否包含登录失败的特征
-                                error_keywords = ["invalid", "incorrect", "failed", "wrong"]
-                                if any(keyword in page_content.lower() for keyword in error_keywords):
+                                error_keywords = ["invalid", "incorrect", "failed", "wrong", "error"]
+                                has_error = any(keyword in page_content.lower() for keyword in error_keywords)
+                                
+                                # 同时检查是否有输入框，有输入框且有错误关键词才算真正失败
+                                has_login_form = await page.query_selector('input[id="login-account-name"]')
+                                
+                                if has_error and has_login_form:
                                     logger.error(f"❌ [{self.auth_config.username}] 检测到登录失败关键词")
                                     # 尝试提取具体错误信息
                                     try:
@@ -1329,7 +1375,16 @@ class LinuxDoAuthenticator(Authenticator):
                                                 return {"success": False, "error": f"Login failed: {error_text.strip()}"}
                                     except:
                                         pass
+                                    
+                                    # CI环境特殊提示
+                                    is_ci = os.getenv("CI", "false").lower() == "true"
+                                    if is_ci:
+                                        return {"success": False, "error": "Login failed in CI - Linux.do may require human verification"}
                                     return {"success": False, "error": "Login failed - check credentials"}
+                                elif has_error:
+                                    logger.warning(f"⚠️ [{self.auth_config.username}] 检测到错误关键词但无登录表单，可能是误判，继续...")
+                                else:
+                                    logger.warning(f"⚠️ [{self.auth_config.username}] 仍在登录页但未检测到明显错误，可能正在加载...")
                                 
                                 # 检查是否需要验证码
                                 captcha_keywords = ["captcha", "recaptcha", "hcaptcha", "verify", "verification"]
