@@ -20,6 +20,7 @@ from utils.config import AccountConfig, ProviderConfig, AuthConfig
 from utils.auth import get_authenticator
 from utils.logger import setup_logger
 from utils.session_cache import SessionCache
+from utils.ci_config import CIConfig
 from utils.constants import (
     DEFAULT_USER_AGENT,
     BROWSER_USER_AGENT,
@@ -135,70 +136,18 @@ class CheckIn:
 
     async def _checkin_with_auth(self, auth_config: AuthConfig) -> Tuple[bool, Optional[Dict]]:
         """使用指定的认证方式进行签到"""
-        # ======== OAuth/Email 方式：优先使用缓存的 Cookies 进行签到 ========
-        if auth_config.method in ["github", "linux.do", "email"]:
-            cache_data = self.session_cache.load(self.account.name, self.provider.name)
-            if cache_data:
-                auth_type_display = "OAuth" if auth_config.method in ["github", "linux.do"] else "Email"
-                self.logger.info(f"🔄 [{self.account.name}] 检测到 {auth_type_display} 缓存，直接使用 Cookies 签到...")
-                try:
-                    cached_cookies_list = cache_data.get("cookies", [])
-                    if cached_cookies_list:
-                        # 转换为字典格式供 httpx 使用
-                        cached_cookies = {cookie["name"]: cookie["value"] for cookie in cached_cookies_list}
-                        user_id = cache_data.get("user_id")
+        # OAuth 缓存降级逻辑已经在 OAuthWithCookieFallback 和各个 Authenticator 内部处理
+        # 这里不再重复实现缓存检查，直接使用认证器的 authenticate 方法
 
-                        # 创建 Cookies 认证配置
-                        cookies_auth_config = AuthConfig(
-                            method="cookies",
-                            cookies=cached_cookies,
-                            api_user=user_id
-                        )
+        # 使用 CIConfig 统一检测 CI 环境
+        is_ci = CIConfig.is_ci_environment()
 
-                        self.logger.info(f"✅ [{self.account.name}] 使用缓存 Cookies 签到（跳过浏览器认证）")
-
-                        # 尝试使用 Cookies 签到
-                        if self.provider.name.lower() == "agentrouter":
-                            user_info = await self._get_user_info(cached_cookies, cookies_auth_config)
-                        else:
-                            checkin_result = await self._do_checkin(cached_cookies, cookies_auth_config)
-                            if checkin_result["success"]:
-                                user_info = await self._get_user_info(cached_cookies, cookies_auth_config)
-                            else:
-                                raise Exception(f"Checkin failed: {checkin_result.get('message')}")
-
-                        if user_info and user_info.get("success"):
-                            # 计算余额变化
-                            balance_change = self._calculate_balance_change(
-                                self.account.name,
-                                "cookies",  # 使用 cookies 方式记录
-                                user_info
-                            )
-                            user_info["balance_change"] = balance_change
-                            self._save_balance_data(self.account.name, "cookies", user_info)
-
-                            self.logger.info(f"✅ [{self.account.name}] Cookies 签到成功（来自 {auth_type_display} 缓存）")
-                            return True, user_info
-                        else:
-                            raise Exception("User info request failed with cached cookies")
-
-                except Exception as e:
-                    self.logger.warning(f"⚠️ [{self.account.name}] Cookies 已过期: {e}")
-                    self.logger.info(f"ℹ️ [{self.account.name}] 重新通过 {auth_config.method} 认证获取新的 session...")
-                    # 删除过期缓存
-                    self.session_cache.delete(self.account.name, self.provider.name)
-
-        # ======== 原有的完整认证流程 ========
-        # 检测是否在 CI 环境中（GitHub Actions、GitLab CI 等）
-        is_ci = os.getenv("CI", "false").lower() == "true" or os.getenv("GITHUB_ACTIONS", "false").lower() == "true"
-        
         # 在CI环境中，如果是需要人机验证的方式，提前警告并可能跳过
         if is_ci and auth_config.method in ["github", "linux.do"]:
-            # 检查是否设置了跳过标志
-            skip_interactive = os.getenv("SKIP_INTERACTIVE_AUTH", "false").lower() == "true"
-            if skip_interactive:
-                self.logger.warning(f"⚠️ [{self.account.name}] CI环境跳过 {auth_config.method} 认证（需要人机验证）")
-                return False, None
+            # 使用 CIConfig 检查是否应该跳过此认证方式
+            if CIConfig.should_skip_auth_method(auth_config.method):
+                self.logger.warning(f"⚠️ [{self.account.name}] CI环境跳过 {auth_config.method} 认证（通过 CI_DISABLED_AUTH_METHODS 配置）")
+                return False, {"error": f"{auth_config.method} skipped in CI (CI_DISABLED_AUTH_METHODS)"}
             else:
                 self.logger.warning(f"⚠️ [{self.account.name}] CI环境中的 {auth_config.method} 认证可能失败（需要人机验证）")
         
@@ -240,6 +189,90 @@ class CheckIn:
             try:
                 page = await context.new_page()
                 self.logger.debug(f"✅ [{self.account.name}] 新页面创建成功")
+
+                # 注入反检测脚本（绕过 Cloudflare 等人机验证）
+                self.logger.debug(f"🔧 [{self.account.name}] 注入反检测脚本...")
+                await page.add_init_script("""
+                    // ==================== 核心反检测脚本 ====================
+
+                    // 1. 移除 webdriver 标志（最重要）
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+
+                    // 2. 覆盖 Chrome 自动化标志
+                    delete navigator.__proto__.webdriver;
+
+                    // 3. 伪装 plugins（headless 默认为空）
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [
+                            {
+                                0: {type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format"},
+                                name: "Chrome PDF Plugin",
+                                length: 1
+                            },
+                            {
+                                0: {type: "application/pdf", suffixes: "pdf", description: "Portable Document Format"},
+                                name: "Chromium PDF Plugin",
+                                length: 1
+                            }
+                        ]
+                    });
+
+                    // 4. 伪装 languages（更真实的语言列表）
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['zh-CN', 'zh', 'en-US', 'en']
+                    });
+
+                    // 5. 伪装 permissions（headless 模式下会暴露）
+                    const originalQuery = window.navigator.permissions.query;
+                    window.navigator.permissions.query = (parameters) => (
+                        parameters.name === 'notifications' ?
+                            Promise.resolve({state: Notification.permission}) :
+                            originalQuery(parameters)
+                    );
+
+                    // 6. 伪装 Chrome 特性
+                    window.chrome = {
+                        runtime: {},
+                        loadTimes: function() {},
+                        csi: function() {},
+                        app: {}
+                    };
+
+                    // 7. 修复 iframe contentWindow（headless 特征）
+                    Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+                        get: function() {
+                            return window;
+                        }
+                    });
+
+                    // 8. 伪装 connection（headless 通常显示为 'none'）
+                    Object.defineProperty(navigator, 'connection', {
+                        get: () => ({
+                            effectiveType: '4g',
+                            rtt: 50,
+                            downlink: 10,
+                            saveData: false
+                        })
+                    });
+
+                    // 9. 伪装 battery API
+                    Object.defineProperty(navigator, 'getBattery', {
+                        get: () => () => Promise.resolve({
+                            charging: true,
+                            chargingTime: 0,
+                            dischargingTime: Infinity,
+                            level: 1
+                        })
+                    });
+
+                    // 10. 伪装时区偏移（防止服务器端检测）
+                    Date.prototype.getTimezoneOffset = function() {
+                        return -480; // 中国时区 UTC+8
+                    };
+                """)
+                self.logger.info(f"✅ [{self.account.name}] 反检测脚本注入成功")
             except Exception as e:
                 self.logger.error(f"❌ [{self.account.name}] 创建页面失败: {e}")
                 await context.close()

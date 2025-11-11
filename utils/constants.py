@@ -3,8 +3,9 @@
 """
 
 # ==================== User-Agent ====================
-# 使用真实的Chrome稳定版本号（避免被识别为机器人）
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+# 使用最新真实的Chrome稳定版本号（2024年12月最新版）
+# 注意：定期更新以避免被识别为过时浏览器
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 # 浏览器User-Agent（与DEFAULT_USER_AGENT保持一致）
 BROWSER_USER_AGENT = DEFAULT_USER_AGENT
@@ -54,30 +55,61 @@ QUOTA_TO_DOLLAR_RATE = 500000
 
 # ==================== 浏览器配置 ====================
 # Playwright浏览器参数
+# 注意：已移除 --disable-web-security 以确保安全性
 BROWSER_LAUNCH_ARGS = [
-    "--disable-blink-features=AutomationControlled",
-    "--disable-dev-shm-usage",
-    "--disable-web-security",
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-gpu",
-    "--disable-software-rasterizer",
-    "--disable-extensions",
-    "--disable-background-networking",
-    "--disable-background-timer-throttling",
-    "--disable-backgrounding-occluded-windows",
-    "--disable-breakpad",
-    "--disable-component-extensions-with-background-pages",
-    "--disable-features=TranslateUI,BlinkGenPropertyTrees",
-    "--disable-ipc-flooding-protection",
-    "--disable-renderer-backgrounding",
-    "--enable-features=NetworkService,NetworkServiceInProcess",
-    "--force-color-profile=srgb",
-    "--hide-scrollbars",
-    "--metrics-recording-only",
-    "--mute-audio",
-    "--no-first-run",
-    "--disable-notifications",
+    # ===== 核心反检测参数 =====
+    "--disable-blink-features=AutomationControlled",  # 最关键！隐藏自动化控制特征
+    "--exclude-switches=enable-automation",  # 移除自动化标识
+
+    # ===== 基础环境配置 =====
+    "--no-sandbox",  # Docker/CI 环境需要
+    "--disable-setuid-sandbox",  # Docker/CI 环境需要
+    "--disable-dev-shm-usage",  # 避免共享内存问题
+
+    # ===== 性能优化 =====
+    "--disable-gpu",  # 无头模式不需要 GPU
+    "--disable-software-rasterizer",  # 禁用软件光栅化
+    "--disable-extensions",  # 禁用扩展以提高性能
+
+    # ===== 伪装真实浏览器行为 =====
+    "--window-size=1920,1080",  # 固定窗口大小
+    "--start-maximized",  # 最大化窗口
+    "--disable-infobars",  # 隐藏信息栏
+    "--disable-notifications",  # 禁用通知
+
+    # ===== 网络与后台优化 =====
+    "--disable-background-networking",  # 禁用后台网络活动
+    "--disable-background-timer-throttling",  # 禁用后台定时器节流
+    "--disable-backgrounding-occluded-windows",  # 禁用被遮挡窗口的后台处理
+    "--disable-renderer-backgrounding",  # 禁用渲染器后台处理
+
+    # ===== 功能禁用（减少检测特征） =====
+    "--disable-breakpad",  # 禁用崩溃报告
+    "--disable-component-extensions-with-background-pages",  # 禁用带后台页面的组件扩展
+    "--disable-features=TranslateUI,BlinkGenPropertyTrees",  # 禁用翻译UI等功能
+    "--disable-ipc-flooding-protection",  # 禁用IPC洪水保护
+    "--disable-hang-monitor",  # 禁用挂起监控
+    "--disable-client-side-phishing-detection",  # 禁用钓鱼检测
+    "--disable-component-update",  # 禁用组件更新
+    "--disable-default-apps",  # 禁用默认应用
+    "--disable-popup-blocking",  # 禁用弹窗阻止
+    "--disable-prompt-on-repost",  # 禁用重新提交提示
+    "--disable-sync",  # 禁用同步
+
+    # ===== 视觉与显示 =====
+    "--force-color-profile=srgb",  # 强制使用sRGB颜色配置
+    "--hide-scrollbars",  # 隐藏滚动条
+
+    # ===== 其他优化 =====
+    "--metrics-recording-only",  # 仅记录指标
+    "--mute-audio",  # 静音
+    "--no-first-run",  # 跳过首次运行欢迎页
+    "--password-store=basic",  # 使用基本密码存储
+    "--use-mock-keychain",  # 使用模拟钥匙串
+    "--safebrowsing-disable-auto-update",  # 禁用安全浏览自动更新
+
+    # ===== 网络服务 =====
+    "--enable-features=NetworkService,NetworkServiceInProcess",  # 启用网络服务
 ]
 
 # 浏览器视口大小
