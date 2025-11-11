@@ -137,11 +137,24 @@ async def main():
     current_balances = {}
     need_notify = False
 
+    # 按平台分组统计
+    platform_stats = {}
+
     for i, account in enumerate(valid_accounts):
         account_key = f"account_{i + 1}"
+        provider = account.provider.upper()
 
-        if notification_content:
-            notification_content.append("\n" + "-" * 60)
+        # 初始化平台统计
+        if provider not in platform_stats:
+            platform_stats[provider] = {
+                'success': 0,
+                'failed': 0,
+                'total_quota': 0.0,
+                'total_used': 0.0,
+                'total_recharge': 0.0,
+                'total_used_change': 0.0,
+                'accounts': []
+            }
 
         try:
             # 获取 Provider 配置
@@ -149,9 +162,13 @@ async def main():
             if not provider_config:
                 logger.error(f"❌ {account.name}: Provider '{account.provider}' 配置未找到")
                 need_notify = True
-                notification_content.append(
-                    f"[FAIL] {account.name}: Provider '{account.provider}' 配置未找到"
-                )
+                platform_stats[provider]['failed'] += 1
+                platform_stats[provider]['accounts'].append({
+                    'name': account.name,
+                    'status': '❌',
+                    'error': f"Provider '{account.provider}' 配置未找到",
+                    'balance': None
+                })
                 continue
 
             logger.info(f"\n🌀 正在处理 {account.name} (使用 Provider '{account.provider}')")
@@ -167,57 +184,63 @@ async def main():
             successful_methods = []
             failed_methods = []
             this_account_balances = {}
-
-            # 构建详细的结果报告
-            account_result = f"📣 {account.name} 汇总:\n"
+            account_quota = 0.0
+            account_used = 0.0
+            account_recharge = 0.0
+            account_used_change = 0.0
+            account_error = None
 
             for auth_method, success, user_info in results:
-                status = "✅ SUCCESS" if success else "❌ FAILED"
-                account_result += f"  {status} 使用 {auth_method} 认证\n"
-
                 if success:
                     # 计入成功方法与账号成功标记
                     account_success = True
                     success_count += 1
                     successful_methods.append(auth_method)
 
-                    # 展示用户信息（若可用）与余额信息
-                    if user_info and user_info.get("success") and user_info.get("display"):
-                        account_result += f"    💰 {user_info['display']}\n"
-
-                        # 记录余额信息
-                        current_quota = user_info.get("quota")
-                        current_used = user_info.get("used")
+                    # 记录余额信息
+                    if user_info and user_info.get("success"):
+                        current_quota = user_info.get("quota", 0)
+                        current_used = user_info.get("used", 0)
                         if current_quota is not None and current_used is not None:
                             this_account_balances[auth_method] = {
                                 "quota": current_quota,
                                 "used": current_used,
                             }
+                            account_quota = max(account_quota, current_quota)
+                            account_used = max(account_used, current_used)
 
-                        # 显示余额变化
+                        # 记录余额变化
                         if user_info.get("balance_change"):
                             change = user_info["balance_change"]
-                            if change["recharge"] != 0 or change["used_change"] != 0:
-                                change_parts = []
-                                if change["recharge"] != 0:
-                                    change_parts.append(f"充值{'+' if change['recharge'] > 0 else ''}${change['recharge']:.2f}")
-                                if change["used_change"] != 0:
-                                    change_parts.append(f"使用{'+' if change['used_change'] > 0 else ''}${change['used_change']:.2f}")
-                                account_result += f"    📈 变动: {', '.join(change_parts)}\n"
-                    elif user_info and user_info.get("message"):
-                        # 签到成功但无法获取详细信息时给出简要信息
-                        account_result += f"    ℹ️ {user_info['message']}\n"
-                    else:
-                        # 签到成功但用户信息不完整时给出提示
-                        account_result += f"    ✅ 签到完成(用户信息暂时无法获取)\n"
+                            account_recharge += change.get("recharge", 0)
+                            account_used_change += change.get("used_change", 0)
                 else:
                     # 仅在认证/签到失败时计入失败方法
                     failed_methods.append(auth_method)
-                    error_msg = user_info.get("error", "Unknown error") if user_info else "Unknown error"
-                    account_result += f"    🔺 错误: {str(error_msg)[:80]}\n"
+                    if not account_error:  # 记录第一个错误
+                        account_error = user_info.get("error", "Unknown error") if user_info else "Unknown error"
 
             if account_success:
                 current_balances[account_key] = this_account_balances
+                platform_stats[provider]['success'] += 1
+                platform_stats[provider]['total_quota'] += account_quota
+                platform_stats[provider]['total_used'] += account_used
+                platform_stats[provider]['total_recharge'] += account_recharge
+                platform_stats[provider]['total_used_change'] += account_used_change
+            else:
+                platform_stats[provider]['failed'] += 1
+
+            # 记录账号信息
+            platform_stats[provider]['accounts'].append({
+                'name': account.name,
+                'status': '✅' if account_success else '❌',
+                'auth_method': successful_methods[0] if successful_methods else (failed_methods[0] if failed_methods else 'unknown'),
+                'quota': account_quota if account_success else None,
+                'used': account_used if account_success else None,
+                'recharge': account_recharge if account_recharge != 0 else None,
+                'used_change': account_used_change if account_used_change != 0 else None,
+                'error': account_error if not account_success else None
+            })
 
             # 如果所有认证方式都失败，需要通知
             if not account_success and results:
@@ -229,31 +252,39 @@ async def main():
                 need_notify = True
                 logger.warning(f"🔔 {account.name} 有部分认证方式失败，将发送通知")
 
-            # 添加统计信息
-            success_count_methods = len(successful_methods)
-            failed_count_methods = len(failed_methods)
-
-            account_result += f"\n📊 统计: {success_count_methods}/{len(results)} 个认证方式成功"
-            if failed_count_methods > 0:
-                account_result += f" ({failed_count_methods} 个失败)"
-
-            notification_content.append(account_result)
-
         except (ConnectionError, TimeoutError) as e:
             error_msg = f"{account.name} 网络连接异常: {type(e).__name__}: {e}"
             logger.error(error_msg, exc_info=True)
             need_notify = True
-            notification_content.append(f"❌ {account.name} 网络异常: {str(e)[:80]}")
+            platform_stats[provider]['failed'] += 1
+            platform_stats[provider]['accounts'].append({
+                'name': account.name,
+                'status': '❌',
+                'error': f"网络异常: {str(e)[:60]}",
+                'balance': None
+            })
         except ValueError as e:
             error_msg = f"{account.name} 配置或数据异常: {type(e).__name__}: {e}"
             logger.error(error_msg, exc_info=True)
             need_notify = True
-            notification_content.append(f"❌ {account.name} 配置异常: {str(e)[:80]}")
+            platform_stats[provider]['failed'] += 1
+            platform_stats[provider]['accounts'].append({
+                'name': account.name,
+                'status': '❌',
+                'error': f"配置异常: {str(e)[:60]}",
+                'balance': None
+            })
         except Exception as e:
             error_msg = f"{account.name} 处理异常: {type(e).__name__}: {e}"
             logger.error(error_msg, exc_info=True)
             need_notify = True
-            notification_content.append(f"❌ {account.name} 异常: {str(e)[:80]}")
+            platform_stats[provider]['failed'] += 1
+            platform_stats[provider]['accounts'].append({
+                'name': account.name,
+                'status': '❌',
+                'error': f"异常: {str(e)[:60]}",
+                'balance': None
+            })
 
     # 检查余额变化
     current_balance_hash = generate_balance_hash(current_balances) if current_balances else None
@@ -276,25 +307,105 @@ async def main():
         save_balance_hash(current_balance_hash)
 
     # 发送通知
-    if need_notify and notification_content:
-        # 构建通知内容
-        summary = [
-            "-" * 60,
-            "📢 签到结果统计:",
-            f"🔵 成功: {success_count}/{total_count}",
-            f"🔴 失败: {total_count - success_count}/{total_count}",
-        ]
+    if need_notify and platform_stats:
+        # 构建融合后的通知内容
+        notification_lines = []
 
-        if success_count == total_count:
-            summary.append("✅ 所有账号签到成功!")
-        elif success_count > 0:
-            summary.append("⚠️ 部分账号签到成功")
-        else:
-            summary.append("❌ 所有账号签到失败")
+        # 标题和执行时间
+        notification_lines.append(f"🕓 执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
+        notification_lines.append("")
 
-        time_info = f"🕓 执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        # 统计结果
+        total_success = sum(p['success'] for p in platform_stats.values())
+        total_failed = sum(p['failed'] for p in platform_stats.values())
+        total_accounts = total_success + total_failed
 
-        notify_content = "\n\n".join([time_info, "\n".join(notification_content), "\n".join(summary)])
+        notification_lines.append("📊 统计结果:")
+        notification_lines.append(f"✓ 成功: {total_success} 个")
+        notification_lines.append(f"✗ 失败: {total_failed} 个")
+        notification_lines.append("")
+
+        # 详细结果 - 按平台分组展示
+        notification_lines.append("📝 详细结果:")
+
+        for platform, stats in sorted(platform_stats.items()):
+            for account_info in stats['accounts']:
+                status = account_info['status']
+                name = account_info['name']
+
+                if status == '✅':
+                    # 成功的账号
+                    quota = account_info.get('quota', 0)
+                    used = account_info.get('used', 0)
+                    balance_str = f"💰 余额: ${quota:.2f}, 已用: ${used:.2f}"
+
+                    # 检查是否有变化
+                    recharge = account_info.get('recharge')
+                    used_change = account_info.get('used_change')
+
+                    if recharge or used_change:
+                        change_parts = []
+                        if recharge:
+                            change_parts.append(f"增加+${abs(recharge):.2f}" if recharge > 0 else f"减少-${abs(recharge):.2f}")
+                        if used_change:
+                            change_parts.append(f"可用+${abs(used_change):.2f}" if used_change > 0 else f"可用-${abs(used_change):.2f}")
+                        notification_lines.append(f"{status} {platform} {name} 签到成功 {balance_str} 📈 变动: {', '.join(change_parts)}")
+                    else:
+                        notification_lines.append(f"{status} {platform} {name} 签到成功 {balance_str}")
+                else:
+                    # 失败的账号
+                    error = account_info.get('error', 'Unknown error')
+                    # 获取上次余额（如果有）
+                    quota = account_info.get('quota')
+                    used = account_info.get('used')
+                    if quota is not None and used is not None:
+                        notification_lines.append(f"{status} {platform} {name} 签到失败: {error} 💰 余额: ${quota:.2f}, 已用: ${used:.2f} (未更新)")
+                    else:
+                        notification_lines.append(f"{status} {platform} {name} 签到失败: {error}")
+
+        notification_lines.append("")
+
+        # 各平台汇总
+        for platform, stats in sorted(platform_stats.items()):
+            if stats['success'] + stats['failed'] == 0:
+                continue
+
+            notification_lines.append(f"─── {platform} 平台汇总 ───")
+            notification_lines.append(f"✓ 成功: {stats['success']} 个 | ✗ 失败: {stats['failed']} 个")
+
+            if stats['total_quota'] > 0 or stats['total_used'] > 0:
+                notification_lines.append(f"💰 总余额: ${stats['total_quota']:.2f}, 总已用: ${stats['total_used']:.2f}")
+
+            if stats['total_recharge'] != 0 or stats['total_used_change'] != 0:
+                change_parts = []
+                if stats['total_recharge'] != 0:
+                    change_parts.append(f"增加+${abs(stats['total_recharge']):.2f}" if stats['total_recharge'] > 0 else f"减少-${abs(stats['total_recharge']):.2f}")
+                if stats['total_used_change'] != 0:
+                    change_parts.append(f"可用+${abs(stats['total_used_change']):.2f}" if stats['total_used_change'] > 0 else f"可用-${abs(stats['total_used_change']):.2f}")
+                notification_lines.append(f"📈 本期变动: {', '.join(change_parts)}")
+
+            notification_lines.append("")
+
+        # 全平台总汇总
+        total_quota = sum(p['total_quota'] for p in platform_stats.values())
+        total_used = sum(p['total_used'] for p in platform_stats.values())
+        total_recharge = sum(p['total_recharge'] for p in platform_stats.values())
+        total_used_change = sum(p['total_used_change'] for p in platform_stats.values())
+
+        notification_lines.append("━━━ 全平台汇总 ━━━")
+        if total_quota > 0 or total_used > 0:
+            notification_lines.append(f"💰 总余额: ${total_quota:.2f}")
+            notification_lines.append(f"📊 总已用: ${total_used:.2f}")
+
+        if total_recharge != 0 or total_used_change != 0:
+            change_parts = []
+            if total_recharge != 0:
+                change_parts.append(f"增加+${abs(total_recharge):.2f}" if total_recharge > 0 else f"减少-${abs(total_recharge):.2f}")
+            if total_used_change != 0:
+                change_parts.append(f"可用+${abs(total_used_change):.2f}" if total_used_change > 0 else f"可用-${abs(total_used_change):.2f}")
+            notification_lines.append(f"📈 本期变动: {', '.join(change_parts)}")
+
+        notify_content = "\n".join(notification_lines)
 
         logger.info("\n" + notify_content)
         notify.push_message("Router签到提醒", notify_content, msg_type="text")
@@ -307,15 +418,13 @@ async def main():
             logger.info("\nℹ️ 所有账号成功（未获取到余额数据），跳过通知")
 
     logger.info("\n" + "=" * 80)
-    logger.info(f"✅ 程序执行完成 - 成功: {success_count}/{total_count}")
-    logger.info("=" * 80)
-
-    logger.info("=" * 80)
-    logger.info(f"程序执行完成 - 成功: {success_count}/{total_count}")
+    total_success_accounts = sum(p['success'] for p in platform_stats.values())
+    total_accounts = sum(p['success'] + p['failed'] for p in platform_stats.values())
+    logger.info(f"✅ 程序执行完成 - 成功: {total_success_accounts}/{total_accounts} 个账号")
     logger.info("=" * 80)
 
     # 设置退出码
-    sys.exit(0 if success_count > 0 else 1)
+    sys.exit(0 if total_success_accounts > 0 else 1)
 
 
 def run_main():
