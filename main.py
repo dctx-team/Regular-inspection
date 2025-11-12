@@ -14,6 +14,7 @@ import sys
 from datetime import datetime
 from typing import List, Dict, Optional
 
+import httpx
 from dotenv import load_dotenv
 
 from checkin import CheckIn
@@ -25,6 +26,94 @@ load_dotenv(override=True)
 BALANCE_HASH_FILE = "balance_hash.txt"
 
 
+def check_dependencies():
+    """检查必要的依赖是否已安装"""
+    logger = logging.getLogger(__name__)
+    missing_deps = []
+
+    try:
+        import playwright
+    except ImportError:
+        missing_deps.append("playwright")
+
+    try:
+        import httpx
+    except ImportError:
+        missing_deps.append("httpx")
+
+    try:
+        import pyotp
+    except ImportError:
+        # pyotp 是可选依赖（仅2FA需要）
+        logger.info("ℹ️ pyotp 未安装（仅GitHub 2FA需要）")
+
+    if missing_deps:
+        logger.error(f"❌ 缺少必要依赖: {', '.join(missing_deps)}")
+        logger.info("💡 请运行: pip install -r requirements.txt")
+        sys.exit(1)
+
+    # 检查 Playwright 浏览器是否已安装
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            try:
+                p.chromium.launch(headless=True, timeout=5000)
+            except Exception as browser_error:
+                if "Executable doesn't exist" in str(browser_error):
+                    logger.error("❌ Playwright 浏览器未安装")
+                    logger.info("💡 请运行: playwright install chromium")
+                    sys.exit(1)
+    except Exception as e:
+        logger.warning(f"⚠️ 无法验证 Playwright 浏览器: {e}")
+
+    logger.info("✅ 所有必要依赖已安装")
+
+
+def validate_env_vars():
+    """验证必要的环境变量"""
+    logger = logging.getLogger(__name__)
+    missing_vars = []
+    warnings = []
+
+    # 检查账号配置（至少需要一个）
+    account_vars = ["ANYROUTER_ACCOUNTS", "AGENTROUTER_ACCOUNTS", "ACCOUNTS"]
+    has_account_config = any(os.getenv(var) for var in account_vars)
+
+    if not has_account_config:
+        missing_vars.append("账号配置环境变量")
+        logger.error(f"❌ 缺少账号配置: 需要设置 {', '.join(account_vars)} 中的至少一个")
+
+    # 检查可选但建议的环境变量
+    optional_vars = {
+        "NOTIFY_PUSHPLUS_TOKEN": "PushPlus 推送通知",
+        "NOTIFY_DINGTALK_WEBHOOK": "钉钉webhook通知",
+        "NOTIFY_FEISHU_WEBHOOK": "飞书webhook通知",
+        "NOTIFY_WECHAT_WORK_WEBHOOK": "企业微信webhook通知",
+    }
+
+    has_notify = any(os.getenv(var) for var in optional_vars.keys())
+    if not has_notify:
+        warnings.append("未配置任何通知方式，将无法接收签到结果通知")
+
+    # 输出验证结果
+    if missing_vars:
+        logger.error("\n❌ 环境变量验证失败:")
+        for var in missing_vars:
+            logger.error(f"   - 缺少: {var}")
+        logger.info("\n💡 配置说明:")
+        logger.info("   请在 .env 文件或环境变量中设置账号配置")
+        logger.info(f"   支持的环境变量: {', '.join(account_vars)}")
+        return False
+
+    if warnings:
+        logger.warning("\n⚠️ 环境变量警告:")
+        for warn in warnings:
+            logger.warning(f"   - {warn}")
+
+    logger.info("✅ 环境变量验证通过")
+    return True
+
+
 def setup_logging():
     """配置日志系统"""
     log_dir = "logs"
@@ -32,9 +121,13 @@ def setup_logging():
 
     log_file = os.path.join(log_dir, f"checkin_{datetime.now().strftime('%Y%m%d')}.log")
 
+    # 从环境变量读取日志级别，默认为INFO
+    log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_str, logging.INFO)
+
     # 配置logging
     logging.basicConfig(
-        level=logging.INFO,
+        level=log_level,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             logging.FileHandler(log_file, encoding='utf-8'),
@@ -42,7 +135,11 @@ def setup_logging():
         ]
     )
 
-    return logging.getLogger(__name__)
+    logger = logging.getLogger(__name__)
+    if log_level_str != "INFO":
+        logger.info(f"ℹ️ 日志级别已设置为: {log_level_str}")
+
+    return logger
 
 
 def load_balance_hash() -> Optional[str]:
@@ -90,6 +187,14 @@ def generate_balance_hash(balances: dict) -> str:
 async def main():
     """主函数"""
     logger = setup_logging()
+
+    # 检查依赖
+    check_dependencies()
+
+    # 验证环境变量
+    if not validate_env_vars():
+        logger.error("❌ 环境变量验证失败，程序退出")
+        return 1
 
     logger.info("=" * 80)
     logger.info("🚀 Router平台多账号自动签到脚本 (重构版)")
@@ -252,15 +357,37 @@ async def main():
                 need_notify = True
                 logger.warning(f"🔔 {account.name} 有部分认证方式失败，将发送通知")
 
-        except (ConnectionError, TimeoutError) as e:
-            error_msg = f"{account.name} 网络连接异常: {type(e).__name__}: {e}"
+        except asyncio.TimeoutError as e:
+            error_msg = f"{account.name} 操作超时: {type(e).__name__}: {e}"
             logger.error(error_msg, exc_info=True)
             need_notify = True
             platform_stats[provider]['failed'] += 1
             platform_stats[provider]['accounts'].append({
                 'name': account.name,
                 'status': '❌',
-                'error': f"网络异常: {str(e)[:60]}",
+                'error': f"超时: {str(e)[:60]}",
+                'balance': None
+            })
+        except httpx.ConnectError as e:
+            error_msg = f"{account.name} 无法连接到服务器: {type(e).__name__}: {e}"
+            logger.error(error_msg, exc_info=True)
+            need_notify = True
+            platform_stats[provider]['failed'] += 1
+            platform_stats[provider]['accounts'].append({
+                'name': account.name,
+                'status': '❌',
+                'error': f"连接失败: {str(e)[:60]}",
+                'balance': None
+            })
+        except httpx.TimeoutException as e:
+            error_msg = f"{account.name} HTTP请求超时: {type(e).__name__}: {e}"
+            logger.error(error_msg, exc_info=True)
+            need_notify = True
+            platform_stats[provider]['failed'] += 1
+            platform_stats[provider]['accounts'].append({
+                'name': account.name,
+                'status': '❌',
+                'error': f"请求超时: {str(e)[:60]}",
                 'balance': None
             })
         except ValueError as e:
@@ -274,15 +401,38 @@ async def main():
                 'error': f"配置异常: {str(e)[:60]}",
                 'balance': None
             })
-        except Exception as e:
-            error_msg = f"{account.name} 处理异常: {type(e).__name__}: {e}"
+        except (KeyError, TypeError, AttributeError) as e:
+            error_msg = f"{account.name} 数据处理异常: {type(e).__name__}: {e}"
             logger.error(error_msg, exc_info=True)
             need_notify = True
             platform_stats[provider]['failed'] += 1
             platform_stats[provider]['accounts'].append({
                 'name': account.name,
                 'status': '❌',
-                'error': f"异常: {str(e)[:60]}",
+                'error': f"数据处理异常: {str(e)[:60]}",
+                'balance': None
+            })
+        except (IOError, OSError) as e:
+            error_msg = f"{account.name} 文件或系统异常: {type(e).__name__}: {e}"
+            logger.error(error_msg, exc_info=True)
+            need_notify = True
+            platform_stats[provider]['failed'] += 1
+            platform_stats[provider]['accounts'].append({
+                'name': account.name,
+                'status': '❌',
+                'error': f"系统异常: {str(e)[:60]}",
+                'balance': None
+            })
+        except Exception as e:
+            # 捕获所有其他未预期的异常（作为安全网）
+            error_msg = f"{account.name} 未知异常: {type(e).__name__}: {e}"
+            logger.error(error_msg, exc_info=True)
+            need_notify = True
+            platform_stats[provider]['failed'] += 1
+            platform_stats[provider]['accounts'].append({
+                'name': account.name,
+                'status': '❌',
+                'error': f"未知异常: {str(e)[:60]}",
                 'balance': None
             })
 

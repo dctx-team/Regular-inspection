@@ -40,7 +40,7 @@
 
 ### 1. JavaScript 特征伪装
 
-**位置**: `checkin.py:195-274`
+**位置**: `checkin.py` 中的 `_checkin_with_auth` 方法内的 `add_init_script` 调用
 
 #### 1.1 移除 webdriver 标志（最关键）
 
@@ -169,7 +169,7 @@ Date.prototype.getTimezoneOffset = function() {
 
 ### 2. 浏览器启动参数优化
 
-**位置**: `utils/constants.py:58-112`
+**位置**: `utils/constants.py` 中的 `BROWSER_LAUNCH_ARGS` 常量定义
 
 #### 2.1 核心反检测参数
 
@@ -192,13 +192,13 @@ Date.prototype.getTimezoneOffset = function() {
 
 #### 2.3 完整参数列表
 
-详见 `utils/constants.py:58-112`，包含 40+ 个优化参数。
+详见 `utils/constants.py` 中的 `BROWSER_LAUNCH_ARGS` 列表，包含 40+ 个优化参数。
 
 ---
 
 ### 3. User-Agent 更新
 
-**位置**: `utils/constants.py:5-11`
+**位置**: `utils/constants.py` 中的 `DEFAULT_USER_AGENT` 和 `BROWSER_USER_AGENT` 常量定义
 
 ```python
 DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -356,7 +356,7 @@ console.log('chrome:', typeof window.chrome);  // 应该是 'object'
 
 ### 定期更新 User-Agent
 
-**位置**: `utils/constants.py:8`
+**位置**: `utils/constants.py` 中的 `DEFAULT_USER_AGENT` 常量
 
 **检查频率**: 每 2-3 个月
 

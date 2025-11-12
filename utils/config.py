@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 from utils.logger import setup_logger
+from utils.auth_method import AuthMethod
 
 logger = setup_logger(__name__)
 
@@ -47,7 +48,7 @@ class ProviderConfig:
 @dataclass
 class AuthConfig:
     """认证配置"""
-    method: str  # 'cookies' | 'email' | 'github' | 'linux.do'
+    method: AuthMethod  # 认证方式枚举
     username: Optional[str] = None
     password: Optional[str] = None
     cookies: Optional[Dict[str, str]] = None
@@ -73,7 +74,7 @@ class AccountConfig:
         # Cookies 认证
         if "cookies" in data and data["cookies"]:
             auth_configs.append(AuthConfig(
-                method="cookies",
+                method=AuthMethod.COOKIES,
                 cookies=data["cookies"],
                 api_user=data.get("api_user")
             ))
@@ -82,7 +83,7 @@ class AccountConfig:
         if "email" in data:
             email_config = data["email"]
             auth_configs.append(AuthConfig(
-                method="email",
+                method=AuthMethod.EMAIL,
                 username=email_config.get("username") or email_config.get("email"),
                 password=email_config.get("password")
             ))
@@ -91,7 +92,7 @@ class AccountConfig:
         if "github" in data:
             github_config = data["github"]
             auth_configs.append(AuthConfig(
-                method="github",
+                method=AuthMethod.GITHUB,
                 username=github_config.get("username"),
                 password=github_config.get("password")
             ))
@@ -100,7 +101,7 @@ class AccountConfig:
         if "linux.do" in data:
             linux_config = data["linux.do"]
             auth_configs.append(AuthConfig(
-                method="linux.do",
+                method=AuthMethod.LINUX_DO,
                 username=linux_config.get("username"),
                 password=linux_config.get("password")
             ))
@@ -209,22 +210,51 @@ def load_accounts() -> Optional[List[AccountConfig]]:
 
 
 def validate_account(account: AccountConfig, index: int) -> bool:
-    """验证账号配置"""
+    """验证账号配置（增强版）"""
     if not account.auth_configs:
         logger.error(f"❌ Account {index + 1} ({account.name}): No authentication method configured")
         return False
 
     for auth in account.auth_configs:
-        if auth.method == "cookies":
+        if auth.method == AuthMethod.COOKIES:
             if not auth.cookies:
                 logger.error(f"❌ Account {index + 1} ({account.name}): Cookies auth requires cookies")
                 return False
+
+            # 添加详细的cookies验证
+            if not isinstance(auth.cookies, dict):
+                logger.error(f"❌ Account {index + 1} ({account.name}): Cookies must be a dictionary")
+                return False
+
+            if len(auth.cookies) == 0:
+                logger.error(f"❌ Account {index + 1} ({account.name}): Cookies dictionary cannot be empty")
+                return False
+
             # api_user 现在是可选的，可以从认证后的用户信息API自动获取
             if not auth.api_user:
                 logger.info(f"ℹ️  Account {index + 1} ({account.name}): api_user 未配置，将从认证后自动获取")
-        elif auth.method in ["email", "github", "linux.do"]:
+
+        elif auth.method in (AuthMethod.EMAIL, AuthMethod.GITHUB, AuthMethod.LINUX_DO):
             if not auth.username or not auth.password:
-                logger.error(f"❌ Account {index + 1} ({account.name}): {auth.method} auth requires username and password")
+                logger.error(f"❌ Account {index + 1} ({account.name}): {auth.method.value} auth requires username and password")
                 return False
+
+            # 添加用户名格式检查
+            if not isinstance(auth.username, str) or len(auth.username.strip()) == 0:
+                logger.error(f"❌ Account {index + 1} ({account.name}): Username must be a non-empty string")
+                return False
+
+            # 添加密码强度检查
+            if len(auth.password) < 6:
+                logger.warning(f"⚠️ Account {index + 1} ({account.name}): Password is too short (< 6 characters), may be insecure")
+
+            # 检查密码是否为常见弱密码
+            weak_passwords = ["123456", "password", "123456789", "12345678", "12345", "111111", "qwerty", "abc123"]
+            if auth.password.lower() in weak_passwords:
+                logger.warning(f"⚠️ Account {index + 1} ({account.name}): Password appears to be a common weak password")
+
+        else:
+            logger.error(f"❌ Account {index + 1} ({account.name}): Unknown auth method '{auth.method.value}'")
+            return False
 
     return True

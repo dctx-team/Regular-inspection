@@ -9,8 +9,9 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from functools import wraps
 
 import httpx
@@ -18,6 +19,7 @@ from playwright.async_api import async_playwright, Page, BrowserContext
 
 from utils.config import AccountConfig, ProviderConfig, AuthConfig
 from utils.auth import get_authenticator
+from utils.auth_method import AuthMethod
 from utils.logger import setup_logger
 from utils.session_cache import SessionCache
 from utils.ci_config import CIConfig
@@ -35,6 +37,24 @@ from utils.constants import (
     QUOTA_TO_DOLLAR_RATE,
     WAF_COOKIE_NAMES,
 )
+
+
+def performance_monitor(func):
+    """性能监控装饰器 - 追踪函数执行时间"""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        logger = setup_logger(__name__)
+        start_time = time.time()
+        try:
+            result = await func(*args, **kwargs)
+            duration = time.time() - start_time
+            logger.debug(f"⏱️ {func.__name__} 执行时间: {duration:.2f}秒")
+            return result
+        except Exception as e:
+            duration = time.time() - start_time
+            logger.error(f"❌ {func.__name__} 失败 (耗时 {duration:.2f}秒): {e}")
+            raise
+    return wrapper
 
 
 def retry_async(max_retries=DEFAULT_MAX_RETRIES, delay=DEFAULT_RETRY_DELAY, backoff=DEFAULT_RETRY_BACKOFF):
@@ -103,7 +123,7 @@ class CheckIn:
             headers["New-Api-User"] = str(api_user)
         return headers
 
-    async def execute(self) -> List[Tuple[str, bool, Optional[Dict]]]:
+    async def execute(self) -> List[Tuple[str, bool, Optional[Dict[str, Any]]]]:
         """
         执行签到流程
 
@@ -115,26 +135,26 @@ class CheckIn:
         # 尝试所有配置的认证方式
         for auth_config in self.account.auth_configs:
             self.logger.info(f"\n{'='*60}")
-            self.logger.info(f"📝 [{self.account.name}] 尝试使用 {auth_config.method} 认证")
+            self.logger.info(f"📝 [{self.account.name}] 尝试使用 {auth_config.method.display_name} 认证")
             self.logger.info(f"{'='*60}")
 
             try:
                 success, user_info = await self._checkin_with_auth(auth_config)
-                results.append((auth_config.method, success, user_info))
+                results.append((auth_config.method.value, success, user_info))
 
                 if success:
-                    self.logger.info(f"✅ [{self.account.name}] {auth_config.method} 认证成功")
+                    self.logger.info(f"✅ [{self.account.name}] {auth_config.method.display_name} 认证成功")
                 else:
                     error_msg = user_info.get("error", "Unknown error") if user_info else "Unknown error"
-                    self.logger.error(f"❌ [{self.account.name}] {auth_config.method} 认证失败: {error_msg}")
+                    self.logger.error(f"❌ [{self.account.name}] {auth_config.method.display_name} 认证失败: {error_msg}")
 
             except Exception as e:
-                self.logger.error(f"❌ [{self.account.name}] {auth_config.method} 异常: {str(e)}")
-                results.append((auth_config.method, False, {"error": str(e)}))
+                self.logger.error(f"❌ [{self.account.name}] {auth_config.method.display_name} 异常: {str(e)}")
+                results.append((auth_config.method.value, False, {"error": str(e)}))
 
         return results
 
-    async def _checkin_with_auth(self, auth_config: AuthConfig) -> Tuple[bool, Optional[Dict]]:
+    async def _checkin_with_auth(self, auth_config: AuthConfig) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """使用指定的认证方式进行签到"""
         # OAuth 缓存降级逻辑已经在 OAuthWithCookieFallback 和各个 Authenticator 内部处理
         # 这里不再重复实现缓存检查，直接使用认证器的 authenticate 方法
@@ -143,20 +163,20 @@ class CheckIn:
         is_ci = CIConfig.is_ci_environment()
 
         # 在CI环境中，如果是需要人机验证的方式，提前警告并可能跳过
-        if is_ci and auth_config.method in ["github", "linux.do"]:
+        if is_ci and auth_config.method.requires_human_verification:
             # 使用 CIConfig 检查是否应该跳过此认证方式
-            if CIConfig.should_skip_auth_method(auth_config.method):
-                self.logger.warning(f"⚠️ [{self.account.name}] CI环境跳过 {auth_config.method} 认证（通过 CI_DISABLED_AUTH_METHODS 配置）")
-                return False, {"error": f"{auth_config.method} skipped in CI (CI_DISABLED_AUTH_METHODS)"}
+            if CIConfig.should_skip_auth_method(auth_config.method.value):
+                self.logger.warning(f"⚠️ [{self.account.name}] CI环境跳过 {auth_config.method.value} 认证（通过 CI_DISABLED_AUTH_METHODS 配置）")
+                return False, {"error": f"{auth_config.method.value} skipped in CI (CI_DISABLED_AUTH_METHODS)"}
             else:
-                self.logger.warning(f"⚠️ [{self.account.name}] CI环境中的 {auth_config.method} 认证可能失败（需要人机验证）")
+                self.logger.warning(f"⚠️ [{self.account.name}] CI环境中的 {auth_config.method.value} 认证可能失败（需要人机验证）")
         
         # 为每次认证创建独立的临时目录和浏览器上下文
         with tempfile.TemporaryDirectory() as temp_dir:
             # 对于需要人机验证的登录方式（GitHub、Linux.do），使用非headless模式
             # 但在 CI 环境中必须使用 headless 模式
-            needs_human_verification = auth_config.method in ["github", "linux.do"]
-            
+            needs_human_verification = auth_config.method.requires_human_verification
+
             if is_ci:
                 headless_mode = True
                 self.logger.info(f"ℹ️ [{self.account.name}] 检测到 CI 环境，强制使用 headless 模式")
@@ -168,10 +188,17 @@ class CheckIn:
                     headless_mode = False
                     self.logger.info(f"ℹ️ [{self.account.name}] 强制使用非headless模式（FORCE_NON_HEADLESS=true）")
                 elif needs_human_verification:
-                    self.logger.info(f"ℹ️ [{self.account.name}] {auth_config.method} 认证使用非headless模式")
+                    self.logger.info(f"ℹ️ [{self.account.name}] {auth_config.method.value} 认证使用非headless模式")
             
             # 启动独立的浏览器上下文（使用不同的临时目录防止cookie冲突）
             try:
+                # 动态调整超时时间（CI环境中使用倍增器）
+                timeout_base = 60000  # 基础超时60秒
+                if is_ci:
+                    timeout_multiplier = CIConfig.get_ci_timeout_multiplier()
+                    timeout_base = int(timeout_base * timeout_multiplier)
+                    self.logger.info(f"ℹ️ [{self.account.name}] CI环境超时调整为 {timeout_base/1000}秒 (倍增器: {timeout_multiplier})")
+
                 context = await self._playwright.chromium.launch_persistent_context(
                     user_data_dir=temp_dir,
                     headless=headless_mode,
@@ -179,7 +206,7 @@ class CheckIn:
                     viewport=BROWSER_VIEWPORT,
                     args=BROWSER_LAUNCH_ARGS,
                     slow_mo=100 if not is_ci else 0,  # CI 环境不需要减速
-                    timeout=60000,  # 60秒超时
+                    timeout=timeout_base,
                 )
                 self.logger.info(f"✅ [{self.account.name}] 浏览器上下文启动成功 (headless={headless_mode})")
             except Exception as e:
@@ -319,13 +346,13 @@ class CheckIn:
                         # 计算余额变化
                         balance_change = self._calculate_balance_change(
                             self.account.name,
-                            auth_config.method,
+                            auth_config.method.value,
                             user_info
                         )
                         user_info["balance_change"] = balance_change
 
                         # 保存余额数据
-                        self._save_balance_data(self.account.name, auth_config.method, user_info)
+                        self._save_balance_data(self.account.name, auth_config.method.value, user_info)
 
                         return True, user_info
                     else:
@@ -344,21 +371,31 @@ class CheckIn:
                         # 计算余额变化
                         balance_change = self._calculate_balance_change(
                             self.account.name,
-                            auth_config.method,
+                            auth_config.method.value,
                             user_info
                         )
                         user_info["balance_change"] = balance_change
 
                         # 保存余额数据
-                        self._save_balance_data(self.account.name, auth_config.method, user_info)
+                        self._save_balance_data(self.account.name, auth_config.method.value, user_info)
 
                         return True, user_info
                     else:
                         return True, {"success": True, "message": "Check-in successful but failed to get user info"}
 
-            except (asyncio.TimeoutError, Exception) as e:
+            except asyncio.TimeoutError as e:
+                self.logger.error(f"❌ [{self.account.name}] 签到超时: {str(e)}")
+                return False, {"error": f"Timeout during check-in: {str(e)}"}
+            except (httpx.HTTPError, httpx.TimeoutException) as e:
+                self.logger.error(f"❌ [{self.account.name}] 网络请求异常: {type(e).__name__}: {str(e)}")
+                return False, {"error": f"Network error during check-in: {str(e)}"}
+            except (KeyError, TypeError, AttributeError) as e:
+                self.logger.error(f"❌ [{self.account.name}] 数据处理异常: {type(e).__name__}: {str(e)}")
+                return False, {"error": f"Data processing error: {str(e)}"}
+            except Exception as e:
+                # 捕获所有其他未预期的异常（包括 Playwright 异常）
                 self.logger.error(f"❌ [{self.account.name}] 签到过程异常: {type(e).__name__}: {str(e)}")
-                return False, {"error": f"Exception during check-in: {str(e)}"}
+                return False, {"error": f"Unexpected error during check-in: {str(e)}"}
 
             finally:
                 # 安全关闭页面和上下文
@@ -368,12 +405,21 @@ class CheckIn:
                         self.logger.debug(f"🔒 [{self.account.name}] 页面已关闭")
                 except Exception as e:
                     self.logger.warning(f"⚠️ [{self.account.name}] 关闭页面时出现警告: {e}")
-                
+
                 try:
                     await context.close()
                     self.logger.debug(f"🔒 [{self.account.name}] 浏览器上下文已关闭")
                 except Exception as e:
                     self.logger.warning(f"⚠️ [{self.account.name}] 关闭浏览器上下文时出现警告: {e}")
+
+                # 清理临时目录
+                try:
+                    if temp_dir and os.path.exists(temp_dir):
+                        import shutil
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        self.logger.debug(f"🗑️ [{self.account.name}] 临时目录已清理: {temp_dir}")
+                except Exception as e:
+                    self.logger.debug(f"⚠️ [{self.account.name}] 清理临时目录失败: {e}")
 
     async def _get_waf_cookies(self, page: Page, context: BrowserContext) -> Dict[str, str]:
         """获取 WAF cookies"""
@@ -444,7 +490,7 @@ class CheckIn:
         return headers
 
 
-    async def _handle_checkin_response(self, response: httpx.Response, client: httpx.AsyncClient, headers: Dict[str, str]) -> Dict:
+    async def _handle_checkin_response(self, response: httpx.Response, client: httpx.AsyncClient, headers: Dict[str, str]) -> Dict[str, Any]:
         """处理签到响应"""
         self.logger.info(f"📊 [{self.account.name}] 签到响应: HTTP {response.status_code}")
 
@@ -467,7 +513,7 @@ class CheckIn:
         else:
             return self._handle_other_response(response)
 
-    async def _handle_200_response(self, response: httpx.Response) -> Dict:
+    async def _handle_200_response(self, response: httpx.Response) -> Dict[str, Any]:
         """处理200响应"""
         try:
             data = response.json()
@@ -486,7 +532,7 @@ class CheckIn:
                 self.logger.info(f"🔄 [{self.account.name}] 检测到HTML响应，可能需要重新登录")
             return {"success": False, "message": "响应解析失败"}
 
-    async def _handle_401_response(self, client: httpx.AsyncClient) -> Dict:
+    async def _handle_401_response(self, client: httpx.AsyncClient) -> Dict[str, Any]:
         """处理401认证失败响应"""
         self.logger.error(f"❌ [{self.account.name}] 签到认证失败 (401)")
         self.logger.info(f"🔍 [{self.account.name}] 检查cookies有效性...")
@@ -499,12 +545,12 @@ class CheckIn:
         except:
             return {"success": False, "message": "认证已过期，需要重新登录"}
 
-    def _handle_403_response(self) -> Dict:
+    def _handle_403_response(self) -> Dict[str, Any]:
         """处理403禁止访问响应"""
         self.logger.error(f"❌ [{self.account.name}] 访问被禁止 (403) - 权限不足")
         return {"success": False, "message": "访问被禁止"}
 
-    async def _handle_404_response(self, client: httpx.AsyncClient, headers: Dict[str, str]) -> Dict:
+    async def _handle_404_response(self, client: httpx.AsyncClient, headers: Dict[str, str]) -> Dict[str, Any]:
         """处理404响应 - 尝试查询用户信息作为保活"""
         self.logger.info(f"🔍 [{self.account.name}] 签到接口返回404，尝试查询用户信息进行保活...")
         try:
@@ -527,16 +573,23 @@ class CheckIn:
         self.logger.error(f"❌ [{self.account.name}] 签到接口和用户信息查询都失败")
         return {"success": False, "message": "签到接口404，用户信息查询也失败"}
 
-    def _handle_other_response(self, response: httpx.Response) -> Dict:
+    def _handle_other_response(self, response: httpx.Response) -> Dict[str, Any]:
         """处理其他HTTP响应"""
         self.logger.error(f"❌ [{self.account.name}] 签到请求失败: HTTP {response.status_code}")
         self.logger.info(f"📄 [{self.account.name}] 响应内容: {response.text[:100]}...")
         return {"success": False, "message": f"HTTP {response.status_code}"}
 
+    @performance_monitor
     @retry_async(max_retries=3, delay=2, backoff=2)
-    async def _do_checkin(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Dict:
-        """执行签到请求（带重试机制）"""
+    async def _do_checkin(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Dict[str, Any]:
+        """执行签到请求（带重试机制和速率限制保护）"""
         try:
+            # 添加随机延迟，避免触发速率限制（1-3秒）
+            import random
+            delay = random.uniform(1, 3)
+            self.logger.debug(f"⏱️ [{self.account.name}] 速率限制保护延迟 {delay:.2f}秒")
+            await asyncio.sleep(delay)
+
             self.logger.info(f"📡 [{self.account.name}] 开始签到请求...")
 
             # 检查关键cookies
@@ -590,7 +643,7 @@ class CheckIn:
 
         return headers
 
-    def _parse_user_info_response(self, data: Dict) -> Optional[Dict]:
+    def _parse_user_info_response(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """解析用户信息响应数据"""
         if data.get("success") and data.get("data"):
             user_data = data["data"]
@@ -614,7 +667,7 @@ class CheckIn:
             self.logger.error(f"❌ [{self.account.name}] API返回失败: {error_msg}")
             return None
 
-    async def _handle_user_info_response(self, response: httpx.Response) -> Optional[Dict]:
+    async def _handle_user_info_response(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
         """处理用户信息响应"""
         self.logger.info(f"📊 [{self.account.name}] 用户信息响应: HTTP {response.status_code}")
 
@@ -648,8 +701,9 @@ class CheckIn:
 
         return None
 
+    @performance_monitor
     @retry_async(max_retries=3, delay=2, backoff=2)
-    async def _get_user_info(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Optional[Dict]:
+    async def _get_user_info(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Optional[Dict[str, Any]]:
         """获取用户信息和余额（带重试机制）"""
         try:
             self.logger.info(f"📡 [{self.account.name}] 开始用户信息查询...")
@@ -678,7 +732,7 @@ class CheckIn:
             self.logger.warning(f"⚠️ [{self.account.name}] 获取用户信息失败: {str(e)}")
             return None
 
-    def _calculate_balance_change(self, account_name: str, auth_method: str, current_info: Dict) -> Dict:
+    def _calculate_balance_change(self, account_name: str, auth_method: str, current_info: Dict[str, Any]) -> Dict[str, Any]:
         """计算余额变化"""
         change = {
             "recharge": 0,
@@ -718,7 +772,7 @@ class CheckIn:
 
         return change
 
-    def _save_balance_data(self, account_name: str, auth_method: str, current_info: Dict) -> None:
+    def _save_balance_data(self, account_name: str, auth_method: str, current_info: Dict[str, Any]) -> None:
         """保存余额数据"""
         try:
             # 读取现有数据

@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, Tuple
 from playwright.async_api import Page, BrowserContext
 import re
 from utils.config import AuthConfig, ProviderConfig
+from utils.auth_method import AuthMethod
 from utils.logger import setup_logger
 from utils.sanitizer import sanitize_exception
 from utils.session_cache import SessionCache
@@ -273,9 +274,12 @@ class Authenticator(ABC):
                 logger.info(f"      ... 还有 {len(cookies_dict) - 5} 个cookies")
 
     async def _fill_password(self, password_input, error_prefix: str = "Password input failed") -> Optional[str]:
-        """安全填写密码"""
+        """安全填写密码 - 模拟人类逐字符输入"""
         try:
-            await password_input.fill(self.auth_config.password)
+            import random
+            # 模拟人类逐字符输入，增加随机延迟
+            for char in self.auth_config.password:
+                await password_input.type(char, delay=50 + random.randint(0, 50))
             return None
         except Exception as e:
             return f"{error_prefix}: {sanitize_exception(e)}"
@@ -1566,13 +1570,13 @@ class LinuxDoAuthenticator(Authenticator):
 
 def get_authenticator(account_name: str, auth_config: AuthConfig, provider_config: ProviderConfig) -> Authenticator:
     """获取对应的认证器"""
-    if auth_config.method == "cookies":
+    if auth_config.method == AuthMethod.COOKIES:
         return CookiesAuthenticator(account_name, auth_config, provider_config)
-    elif auth_config.method == "email":
+    elif auth_config.method == AuthMethod.EMAIL:
         return EmailAuthenticator(account_name, auth_config, provider_config)
-    elif auth_config.method == "github":
+    elif auth_config.method == AuthMethod.GITHUB:
         return GitHubAuthenticator(account_name, auth_config, provider_config)
-    elif auth_config.method == "linux.do":
+    elif auth_config.method == AuthMethod.LINUX_DO:
         return LinuxDoAuthenticator(account_name, auth_config, provider_config)
     else:
-        raise ValueError(f"Unknown auth method: {auth_config.method}")
+        raise ValueError(f"Unknown auth method: {auth_config.method.value}")
