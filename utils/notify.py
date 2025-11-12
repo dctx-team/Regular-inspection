@@ -123,12 +123,32 @@ class NotificationKit:
             client.post('http://www.pushplus.plus/send', json=data)
 
     def send_serverPush(self, title: str, content: str) -> None:
+        """发送 ServerChan 通知（支持多种版本）"""
         if not self.server_push_key:
             raise ValueError('Server Push key not configured')
 
+        url = f'https://sctapi.ftqq.com/{self.server_push_key}.send'
         data = {'title': title, 'desp': content}
+
         with httpx.Client(timeout=30.0) as client:
-            client.post(f'https://sctapi.ftqq.com/{self.server_push_key}.send', json=data)
+            # 尝试 1: JSON 格式（Server酱 Turbo 版）
+            try:
+                response = client.post(url, json=data)
+                response.raise_for_status()
+                logger.debug('ServerChan 通知发送成功 (JSON格式)')
+                return
+            except Exception as json_error:
+                logger.debug(f'JSON格式发送失败: {json_error}，尝试 form-urlencoded 格式')
+
+                # 尝试 2: form-urlencoded 格式（旧版本 Server酱）
+                try:
+                    response = client.post(url, data=data)
+                    response.raise_for_status()
+                    logger.debug('ServerChan 通知发送成功 (form-urlencoded格式)')
+                    return
+                except Exception as form_error:
+                    # 两种方式都失败
+                    raise ValueError(f'ServerChan 发送失败 - JSON: {str(json_error)[:50]}, Form: {str(form_error)[:50]}')
 
     def send_dingtalk(self, title: str, content: str) -> None:
         if not self.dingding_webhook:
@@ -161,37 +181,53 @@ class NotificationKit:
             client.post(self.weixin_webhook, json=data)
 
     def push_message(self, title: str, content: str, msg_type: Literal['text', 'html'] = 'text') -> None:
-        notifications = [
-            ('Email', lambda: self.send_email(title, content, msg_type)),
-            ('PushPlus', lambda: self.send_pushplus(title, content)),
-            ('Server Push', lambda: self.send_serverPush(title, content)),
-            ('DingTalk', lambda: self.send_dingtalk(title, content)),
-            ('Feishu', lambda: self.send_feishu(title, content)),
-            ('WeChat Work', lambda: self.send_wecom(title, content)),
+        """发送通知消息（仅尝试已配置的渠道）"""
+        # 定义所有可用的通知渠道（名称、检查配置、发送函数）
+        all_notifications = [
+            ('Email', lambda: bool(self.email_user and self.email_pass and self.email_to),
+             lambda: self.send_email(title, content, msg_type)),
+            ('PushPlus', lambda: bool(self.pushplus_token),
+             lambda: self.send_pushplus(title, content)),
+            ('Server Push', lambda: bool(self.server_push_key),
+             lambda: self.send_serverPush(title, content)),
+            ('DingTalk', lambda: bool(self.dingding_webhook),
+             lambda: self.send_dingtalk(title, content)),
+            ('Feishu', lambda: bool(self.feishu_webhook),
+             lambda: self.send_feishu(title, content)),
+            ('WeChat Work', lambda: bool(self.weixin_webhook),
+             lambda: self.send_wecom(title, content)),
         ]
+
+        # 筛选已配置的通知渠道
+        enabled_notifications = [(name, send_func) for name, check_func, send_func in all_notifications if check_func()]
+
+        if not enabled_notifications:
+            logger.warning('⚠️ 未配置任何通知渠道，无法发送通知')
+            return
+
+        logger.info(f'📢 检测到 {len(enabled_notifications)} 个已配置的通知渠道')
 
         success_count = 0
         failed_count = 0
 
-        for name, func in notifications:
+        for name, func in enabled_notifications:
             try:
                 func()
-                logger.info(f'[{name}]: Message push successful!')
-                logger.info(f'[{name}]: 通知发送成功')
+                logger.info(f'✅ [{name}]: 通知发送成功')
                 success_count += 1
             except Exception as e:
-                error_msg = f'[{name}]: Message push failed! Reason: {str(e)}'
-                logger.error(error_msg)
+                error_msg = f'❌ [{name}]: 通知发送失败 - {str(e)}'
                 logger.error(error_msg)
                 failed_count += 1
 
         # 记录总体通知结果
         if success_count == 0 and failed_count > 0:
-            logger.error(f'所有通知方式都失败 ({failed_count} 个)')
+            logger.error(f'❌ 所有已配置的通知方式都失败 ({failed_count}/{len(enabled_notifications)})')
         elif failed_count > 0:
-            logger.warning(f'部分通知失败: 成功 {success_count}, 失败 {failed_count}')
+            logger.warning(f'⚠️ 部分通知失败: 成功 {success_count}/{len(enabled_notifications)}')
         else:
-            logger.info(f'所有通知发送成功 ({success_count} 个)')
+            logger.info(f'✅ 所有通知发送成功 ({success_count}/{len(enabled_notifications)})')
+
 
 
 notify = NotificationKit()

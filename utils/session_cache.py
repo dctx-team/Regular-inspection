@@ -1,11 +1,12 @@
 """
-会话缓存模块 - 保存和恢复认证会话
+会话缓存模块 - 保存和恢复认证会话（支持加密）
 """
 
 import json
 import os
+import base64
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from datetime import datetime, timedelta
 from utils.logger import setup_logger
 
@@ -13,16 +14,76 @@ logger = setup_logger(__name__)
 
 
 class SessionCache:
-    """会话缓存管理器"""
+    """会话缓存管理器（支持敏感数据加密）"""
 
     def __init__(self, cache_dir: str = ".cache/sessions"):
         """初始化缓存管理器
-        
+
         Args:
             cache_dir: 缓存目录路径
         """
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # 尝试加载加密密钥
+        self.encryption_key = os.getenv("SESSION_CACHE_KEY")
+        if self.encryption_key:
+            logger.info("✅ 会话缓存加密已启用")
+        else:
+            logger.warning("⚠️ SESSION_CACHE_KEY 未设置，会话数据将使用Base64编码（建议设置环境变量启用加密）")
+
+    def _encrypt_data(self, data: str) -> str:
+        """加密敏感数据
+
+        Args:
+            data: 原始数据
+
+        Returns:
+            加密后的数据（Base64编码）
+        """
+        try:
+            # 使用简单的XOR加密（如果有密钥）+ Base64编码
+            if self.encryption_key:
+                key_bytes = self.encryption_key.encode('utf-8')
+                data_bytes = data.encode('utf-8')
+                # XOR加密
+                encrypted = bytearray(len(data_bytes))
+                for i in range(len(data_bytes)):
+                    encrypted[i] = data_bytes[i] ^ key_bytes[i % len(key_bytes)]
+                return base64.b64encode(encrypted).decode('utf-8')
+            else:
+                # 仅使用Base64编码（不是真正的加密，但至少不是明文）
+                return base64.b64encode(data.encode('utf-8')).decode('utf-8')
+        except Exception as e:
+            logger.error(f"❌ 数据加密失败: {e}")
+            raise
+
+    def _decrypt_data(self, encrypted_data: str) -> str:
+        """解密敏感数据
+
+        Args:
+            encrypted_data: 加密的数据
+
+        Returns:
+            解密后的原始数据
+        """
+        try:
+            # Base64解码 + XOR解密（如果有密钥）
+            decoded = base64.b64decode(encrypted_data.encode('utf-8'))
+
+            if self.encryption_key:
+                key_bytes = self.encryption_key.encode('utf-8')
+                # XOR解密
+                decrypted = bytearray(len(decoded))
+                for i in range(len(decoded)):
+                    decrypted[i] = decoded[i] ^ key_bytes[i % len(key_bytes)]
+                return decrypted.decode('utf-8')
+            else:
+                # 仅Base64解码
+                return decoded.decode('utf-8')
+        except Exception as e:
+            logger.error(f"❌ 数据解密失败: {e}")
+            raise
 
     def _get_cache_file_path(self, account_name: str, provider: str) -> Path:
         """获取缓存文件路径
@@ -46,8 +107,8 @@ class SessionCache:
         username: Optional[str] = None,
         expiry_hours: int = 24
     ) -> bool:
-        """保存会话数据
-        
+        """保存会话数据（敏感数据加密）
+
         Args:
             account_name: 账号名称
             provider: 提供商名称
@@ -55,63 +116,84 @@ class SessionCache:
             user_id: 用户ID
             username: 用户名
             expiry_hours: 过期时间（小时）
-            
+
         Returns:
             是否保存成功
         """
         try:
             cache_file = self._get_cache_file_path(account_name, provider)
-            
+
+            # 将敏感数据序列化并加密
+            sensitive_data = {
+                "cookies": cookies,
+                "user_id": user_id
+            }
+            encrypted_data = self._encrypt_data(json.dumps(sensitive_data, ensure_ascii=False))
+
             cache_data = {
                 "account_name": account_name,
                 "provider": provider,
-                "cookies": cookies,
-                "user_id": user_id,
-                "username": username,
+                "encrypted_data": encrypted_data,  # 加密的敏感数据
+                "username": username,  # 用户名可以不加密（用于日志显示）
                 "created_at": datetime.now().isoformat(),
                 "expires_at": (datetime.now() + timedelta(hours=expiry_hours)).isoformat()
             }
-            
+
             with open(cache_file, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, indent=2, ensure_ascii=False)
-            
-            logger.info(f"✅ 会话缓存已保存: {account_name} ({provider})")
+
+            logger.info(f"✅ 会话缓存已保存（加密）: {account_name} ({provider})")
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ 保存会话缓存失败: {e}")
             return False
 
-    def load(self, account_name: str, provider: str) -> Optional[Dict]:
-        """加载会话数据
-        
+    def load(self, account_name: str, provider: str) -> Optional[Dict[str, Any]]:
+        """加载会话数据（自动解密）
+
         Args:
             account_name: 账号名称
             provider: 提供商名称
-            
+
         Returns:
             会话数据字典，如果不存在或已过期则返回None
         """
         try:
             cache_file = self._get_cache_file_path(account_name, provider)
-            
+
             if not cache_file.exists():
                 logger.info(f"ℹ️ 未找到会话缓存: {account_name} ({provider})")
                 return None
-            
+
             with open(cache_file, 'r', encoding='utf-8') as f:
                 cache_data = json.load(f)
-            
+
             # 检查是否过期
             expires_at = datetime.fromisoformat(cache_data["expires_at"])
             if datetime.now() > expires_at:
                 logger.info(f"⚠️ 会话缓存已过期: {account_name} ({provider})")
                 self.delete(account_name, provider)
                 return None
-            
-            logger.info(f"✅ 会话缓存加载成功: {account_name} ({provider})")
+
+            # 解密敏感数据
+            if "encrypted_data" in cache_data:
+                # 新格式：使用加密
+                encrypted_data = cache_data["encrypted_data"]
+                decrypted_json = self._decrypt_data(encrypted_data)
+                sensitive_data = json.loads(decrypted_json)
+
+                # 合并解密的数据
+                cache_data["cookies"] = sensitive_data.get("cookies", [])
+                cache_data["user_id"] = sensitive_data.get("user_id")
+                logger.info(f"✅ 会话缓存加载成功（已解密）: {account_name} ({provider})")
+            else:
+                # 旧格式：明文存储（向后兼容）
+                logger.warning(f"⚠️ 加载旧格式会话缓存（明文）: {account_name} ({provider})")
+                logger.info(f"💡 建议重新登录以使用加密缓存")
+
             return cache_data
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"❌ 缓存文件JSON格式错误: {e}")
             self.delete(account_name, provider)

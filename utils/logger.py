@@ -33,6 +33,8 @@ class AccountLogger:
         self.account_name = account_name
         self.logger = logging.getLogger(f"account_{account_name}")
         self.logger.setLevel(logging.INFO)
+        # 禁用向上传播，避免与 root logger 重复输出
+        self.logger.propagate = False
 
         # 避免重复添加处理器
         if not self.logger.handlers:
@@ -69,6 +71,8 @@ def setup_logger(name: str = "router_checkin") -> logging.Logger:
     """设置标准日志记录器"""
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
+    # 禁用向上传播，避免与 root logger 重复输出
+    logger.propagate = False
 
     # 避免重复添加处理器
     if not logger.handlers:
