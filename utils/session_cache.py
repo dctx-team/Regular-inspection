@@ -8,6 +8,7 @@ import base64
 from pathlib import Path
 from typing import Dict, Optional, List, Any
 from datetime import datetime, timedelta
+from cryptography.fernet import Fernet, InvalidToken
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -27,13 +28,36 @@ class SessionCache:
 
         # 尝试加载加密密钥
         self.encryption_key = os.getenv("SESSION_CACHE_KEY")
+        self.cipher = None
+
         if self.encryption_key:
-            logger.info("✅ 会话缓存加密已启用")
+            try:
+                # 确保密钥是有效的 Fernet 密钥（44字符 base64 编码）
+                if len(self.encryption_key) == 44 and self.encryption_key.endswith('='):
+                    # 已经是 Fernet 格式的密钥
+                    self.cipher = Fernet(self.encryption_key.encode())
+                    logger.info("✅ 会话缓存加密已启用（Fernet AES-128）")
+                else:
+                    # 从旧的密钥生成 Fernet 密钥（向后兼容）
+                    logger.warning("⚠️ 检测到旧格式密钥，正在转换为 Fernet 格式...")
+                    # 使用 SHA256 哈希生成固定长度的密钥，然后转为 Fernet 格式
+                    import hashlib
+                    key_hash = hashlib.sha256(self.encryption_key.encode()).digest()
+                    fernet_key = base64.urlsafe_b64encode(key_hash)
+                    self.cipher = Fernet(fernet_key)
+                    logger.info("✅ 会话缓存加密已启用（Fernet AES-128，已转换旧密钥）")
+            except Exception as e:
+                logger.error(f"❌ 初始化加密失败: {e}")
+                logger.warning("⚠️ 将使用 Base64 编码（不加密）")
+                self.cipher = None
         else:
             logger.warning("⚠️ SESSION_CACHE_KEY 未设置，会话数据将使用Base64编码（建议设置环境变量启用加密）")
+            logger.info("💡 提示：运行以下命令生成 Fernet 密钥：")
+            logger.info("   python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"")
+
 
     def _encrypt_data(self, data: str) -> str:
-        """加密敏感数据
+        """加密敏感数据（使用 Fernet AES-128）
 
         Args:
             data: 原始数据
@@ -42,15 +66,10 @@ class SessionCache:
             加密后的数据（Base64编码）
         """
         try:
-            # 使用简单的XOR加密（如果有密钥）+ Base64编码
-            if self.encryption_key:
-                key_bytes = self.encryption_key.encode('utf-8')
-                data_bytes = data.encode('utf-8')
-                # XOR加密
-                encrypted = bytearray(len(data_bytes))
-                for i in range(len(data_bytes)):
-                    encrypted[i] = data_bytes[i] ^ key_bytes[i % len(key_bytes)]
-                return base64.b64encode(encrypted).decode('utf-8')
+            if self.cipher:
+                # 使用 Fernet (AES-128) 加密
+                encrypted = self.cipher.encrypt(data.encode('utf-8'))
+                return encrypted.decode('utf-8')
             else:
                 # 仅使用Base64编码（不是真正的加密，但至少不是明文）
                 return base64.b64encode(data.encode('utf-8')).decode('utf-8')
@@ -59,7 +78,7 @@ class SessionCache:
             raise
 
     def _decrypt_data(self, encrypted_data: str) -> str:
-        """解密敏感数据
+        """解密敏感数据（支持 Fernet 和旧 XOR 格式）
 
         Args:
             encrypted_data: 加密的数据
@@ -68,21 +87,49 @@ class SessionCache:
             解密后的原始数据
         """
         try:
-            # Base64解码 + XOR解密（如果有密钥）
-            decoded = base64.b64decode(encrypted_data.encode('utf-8'))
-
-            if self.encryption_key:
-                key_bytes = self.encryption_key.encode('utf-8')
-                # XOR解密
-                decrypted = bytearray(len(decoded))
-                for i in range(len(decoded)):
-                    decrypted[i] = decoded[i] ^ key_bytes[i % len(key_bytes)]
-                return decrypted.decode('utf-8')
+            if self.cipher:
+                try:
+                    # 尝试使用 Fernet 解密
+                    decrypted = self.cipher.decrypt(encrypted_data.encode('utf-8'))
+                    return decrypted.decode('utf-8')
+                except InvalidToken:
+                    # Fernet 解密失败，尝试旧的 XOR 格式（向后兼容）
+                    logger.debug("🔄 Fernet 解密失败，尝试 XOR 格式...")
+                    return self._decrypt_data_xor(encrypted_data)
             else:
                 # 仅Base64解码
+                decoded = base64.b64decode(encrypted_data.encode('utf-8'))
                 return decoded.decode('utf-8')
         except Exception as e:
             logger.error(f"❌ 数据解密失败: {e}")
+            raise
+
+    def _decrypt_data_xor(self, encrypted_data: str) -> str:
+        """解密旧的 XOR 加密数据（向后兼容）
+
+        Args:
+            encrypted_data: XOR 加密的数据
+
+        Returns:
+            解密后的原始数据
+        """
+        try:
+            if not self.encryption_key:
+                raise ValueError("No encryption key for XOR decryption")
+
+            decoded = base64.b64decode(encrypted_data.encode('utf-8'))
+            key_bytes = self.encryption_key.encode('utf-8')
+
+            # XOR解密
+            decrypted = bytearray(len(decoded))
+            for i in range(len(decoded)):
+                decrypted[i] = decoded[i] ^ key_bytes[i % len(key_bytes)]
+
+            result = decrypted.decode('utf-8')
+            logger.info("✅ 成功使用 XOR 解密旧格式数据（建议重新登录以使用 Fernet 加密）")
+            return result
+        except Exception as e:
+            logger.error(f"❌ XOR 解密失败: {e}")
             raise
 
     def _get_cache_file_path(self, account_name: str, provider: str) -> Path:
@@ -107,7 +154,7 @@ class SessionCache:
         username: Optional[str] = None,
         expiry_hours: int = 24
     ) -> bool:
-        """保存会话数据（敏感数据加密）
+        """保存会话数据（敏感数据使用 Fernet AES-128 加密）
 
         Args:
             account_name: 账号名称
@@ -142,7 +189,8 @@ class SessionCache:
             with open(cache_file, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, indent=2, ensure_ascii=False)
 
-            logger.info(f"✅ 会话缓存已保存（加密）: {account_name} ({provider})")
+            encryption_method = "Fernet AES-128" if self.cipher else "Base64"
+            logger.info(f"✅ 会话缓存已保存（{encryption_method} 加密）: {account_name} ({provider})")
             return True
 
         except Exception as e:

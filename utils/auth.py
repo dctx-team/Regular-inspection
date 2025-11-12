@@ -56,62 +56,126 @@ class Authenticator(ABC):
         """
         pass
 
-    async def _wait_for_cloudflare_challenge(self, page: Page, max_wait_seconds: int = 60) -> bool:
-        """等待Cloudflare验证完成（优化版）- 增加到60秒"""
+    async def _wait_for_cloudflare_challenge(
+        self,
+        page: Page,
+        max_wait_seconds: int = 60,
+        max_retries: int = 3
+    ) -> bool:
+        """等待Cloudflare验证完成（优化版 - 支持重试机制）
+
+        Args:
+            page: Playwright页面对象
+            max_wait_seconds: 单次等待最大秒数
+            max_retries: 最大重试次数
+
+        Returns:
+            bool: 是否通过验证
+        """
         try:
             # 检查是否跳过Cloudflare验证
             if os.getenv("SKIP_CLOUDFLARE_CHECK", "false").lower() == "true":
                 logger.info(f"ℹ️ 已配置跳过Cloudflare验证检查")
                 return True
-            
-            logger.info(f"🛡️ 检测到可能的Cloudflare验证，等待完成（最多{max_wait_seconds}秒）...")
-            start_time = asyncio.get_event_loop().time()
 
-            while asyncio.get_event_loop().time() - start_time < max_wait_seconds:
-                current_url = page.url
-                page_title = await page.title()
-                
-                # 更智能的检测：检查页面内容而不仅仅是标题
-                page_content = await page.content()
-                has_cloudflare_markers = any(marker in page_content.lower() for marker in [
-                    "just a moment",
-                    "checking your browser",
-                    "cloudflare",
-                    "ddos protection"
-                ])
+            for retry in range(max_retries):
+                # 计算本次重试的等待时间（指数退避）
+                current_wait_time = max_wait_seconds * (1.5 ** retry)  # 60s, 90s, 135s
+                current_wait_time = min(current_wait_time, 180)  # 最多180秒
 
-                # 检查是否是Cloudflare验证页
-                if has_cloudflare_markers and ("verification" in page_title.lower() or "checking" in page_title.lower()):
-                    elapsed = int(asyncio.get_event_loop().time() - start_time)
-                    logger.info(f"   ⏳ Cloudflare验证中，继续等待... ({elapsed}s)")
-                    
-                    # 超过20秒后降低检测频率
-                    wait_time = 3000 if elapsed > 20 else 1500
-                    await page.wait_for_timeout(wait_time)
-                    continue
+                if retry > 0:
+                    logger.info(f"🔄 Cloudflare验证重试 {retry}/{max_retries-1}（等待时间: {int(current_wait_time)}秒）")
 
-                # 检查是否已经通过验证
-                if "login" in current_url.lower() and not has_cloudflare_markers:
-                    logger.info(f"✅ Cloudflare验证完成")
+                    # 重试策略1: 刷新页面
+                    if retry == 1:
+                        try:
+                            logger.info(f"🔄 策略1: 刷新页面")
+                            await page.reload(wait_until="domcontentloaded", timeout=30000)
+                            await page.wait_for_timeout(5000)
+                        except Exception as e:
+                            logger.warning(f"⚠️ 刷新页面失败: {e}")
+
+                    # 重试策略2: 重新访问登录页
+                    elif retry == 2:
+                        try:
+                            logger.info(f"🔄 策略2: 重新访问登录页")
+                            await page.goto(
+                                self.provider_config.get_login_url(),
+                                wait_until="domcontentloaded",
+                                timeout=30000
+                            )
+                            await page.wait_for_timeout(10000)
+                        except Exception as e:
+                            logger.warning(f"⚠️ 重新访问失败: {e}")
+                else:
+                    logger.info(f"🛡️ 检测到可能的Cloudflare验证，等待完成（最多{int(current_wait_time)}秒）...")
+
+                # 开始等待验证通过
+                start_time = asyncio.get_event_loop().time()
+                verification_passed = False
+
+                while asyncio.get_event_loop().time() - start_time < current_wait_time:
+                    current_url = page.url
+                    page_title = await page.title()
+
+                    # 更智能的检测：检查页面内容而不仅仅是标题
+                    page_content = await page.content()
+                    has_cloudflare_markers = any(marker in page_content.lower() for marker in [
+                        "just a moment",
+                        "checking your browser",
+                        "cloudflare",
+                        "ddos protection"
+                    ])
+
+                    # 检查是否是Cloudflare验证页
+                    if has_cloudflare_markers and ("verification" in page_title.lower() or "checking" in page_title.lower()):
+                        elapsed = int(asyncio.get_event_loop().time() - start_time)
+                        logger.info(f"   ⏳ Cloudflare验证中，继续等待... ({elapsed}s/{int(current_wait_time)}s)")
+
+                        # 超过20秒后降低检测频率
+                        wait_time = 3000 if elapsed > 20 else 1500
+                        await page.wait_for_timeout(wait_time)
+                        continue
+
+                    # 检查是否已经通过验证
+                    if "login" in current_url.lower() and not has_cloudflare_markers:
+                        logger.info(f"✅ Cloudflare验证完成（第 {retry + 1} 次尝试）")
+                        verification_passed = True
+                        break
+
+                    # 检查登录页面特征（更可靠的判断）
+                    try:
+                        login_indicators = await page.query_selector_all(
+                            'input[type="email"], input[type="password"], input[name="login"], '
+                            'button:has-text("登录"), button:has-text("Login")'
+                        )
+                        if len(login_indicators) > 0:
+                            logger.info(f"✅ 检测到登录表单，验证已完成（第 {retry + 1} 次尝试）")
+                            verification_passed = True
+                            break
+                    except:
+                        pass
+
+                    # 更短的等待时间
+                    await page.wait_for_timeout(1000)
+
+                # 如果本次尝试通过验证，直接返回成功
+                if verification_passed:
                     return True
 
-                # 检查登录页面特征（更可靠的判断）
-                try:
-                    login_indicators = await page.query_selector_all(
-                        'input[type="email"], input[type="password"], input[name="login"], '
-                        'button:has-text("登录"), button:has-text("Login")'
+                # 如果是最后一次重试，给出警告后尝试继续
+                if retry == max_retries - 1:
+                    logger.warning(
+                        f"⚠️ Cloudflare验证在 {max_retries} 次尝试后仍未通过"
+                        f"（总等待时间约 {int(sum(max_wait_seconds * (1.5 ** i) for i in range(max_retries)))}秒），"
+                        f"尝试继续..."
                     )
-                    if len(login_indicators) > 0:
-                        logger.info(f"✅ 检测到登录表单，验证已完成")
-                        return True
-                except:
-                    pass
+                    # 超时后不直接返回False，而是尝试继续（可能是误判）
+                    return True
+                else:
+                    logger.warning(f"⚠️ 第 {retry + 1} 次验证尝试超时，准备重试...")
 
-                # 更短的等待时间
-                await page.wait_for_timeout(1000)
-
-            logger.warning(f"⚠️ Cloudflare验证等待超时({max_wait_seconds}s)，尝试继续...")
-            # 超时后不直接返回False，而是尝试继续（可能是误判）
+            # 所有重试都失败，但仍尝试继续（可能是误判）
             return True
 
         except Exception as e:

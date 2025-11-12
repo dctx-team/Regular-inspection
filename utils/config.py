@@ -4,6 +4,7 @@
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 from utils.logger import setup_logger
@@ -209,6 +210,75 @@ def load_accounts() -> Optional[List[AccountConfig]]:
     return all_accounts if all_accounts else None
 
 
+def validate_password_strength(password: str, account_name: str, index: int) -> tuple[bool, Optional[str]]:
+    """验证密码强度
+
+    Args:
+        password: 密码
+        account_name: 账号名称
+        index: 账号索引
+
+    Returns:
+        (is_valid, error_message): 验证结果和错误消息
+    """
+    # 检查密码最小长度
+    if len(password) < 6:
+        return False, f"密码长度不足（当前 {len(password)} 字符，最少需要 6 字符）"
+
+    # 检查是否为常见弱密码（严重安全风险，必须拒绝）
+    common_weak_passwords = [
+        "123456", "password", "123456789", "12345678", "12345", "111111",
+        "qwerty", "abc123", "password123", "admin", "letmein", "welcome",
+        "monkey", "1234567890", "qwerty123", "123123", "000000", "654321"
+    ]
+
+    if password.lower() in common_weak_passwords:
+        return False, f"密码过于简单（'{password}' 是常见弱密码，存在严重安全风险）"
+
+    # 检查密码复杂度（建议但不强制）
+    has_uppercase = bool(re.search(r'[A-Z]', password))
+    has_lowercase = bool(re.search(r'[a-z]', password))
+    has_digit = bool(re.search(r'\d', password))
+    has_special = bool(re.search(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\;/`~]', password))
+
+    complexity_count = sum([has_uppercase, has_lowercase, has_digit, has_special])
+
+    # 如果密码较短（6-7字符）但复杂度不足，给出警告
+    if len(password) < 8 and complexity_count < 3:
+        logger.warning(
+            f"⚠️ Account {index + 1} ({account_name}): 密码较短且复杂度不足 "
+            f"(长度 {len(password)}，建议至少 8 字符并包含大写、小写、数字、特殊字符中的 3 种)"
+        )
+
+    # 如果密码足够长（8+字符）但仅包含单一字符类型，给出警告
+    if len(password) >= 8 and complexity_count < 2:
+        logger.warning(
+            f"⚠️ Account {index + 1} ({account_name}): 密码复杂度不足 "
+            f"(建议包含大写、小写、数字、特殊字符中的至少 2 种)"
+        )
+
+    # 检查是否为纯数字或纯字母（长度>=8时仅警告，长度<8时拒绝）
+    if password.isdigit() and len(password) < 8:
+        return False, f"密码过于简单（纯数字且长度 < 8，存在安全风险）"
+
+    if password.isalpha() and len(password) < 8:
+        return False, f"密码过于简单（纯字母且长度 < 8，存在安全风险）"
+
+    # 检查重复字符（如 "111111", "aaaaaa"）
+    if len(set(password)) <= 2 and len(password) >= 6:
+        return False, f"密码过于简单（重复字符过多，存在安全风险）"
+
+    # 检查连续字符（如 "123456", "abcdef"）
+    consecutive_patterns = [
+        "0123456789", "abcdefghijklmnopqrstuvwxyz", "qwertyuiop", "asdfghjkl"
+    ]
+    for pattern in consecutive_patterns:
+        if password.lower() in pattern and len(password) >= 5:
+            return False, f"密码过于简单（包含连续字符序列，存在安全风险）"
+
+    return True, None
+
+
 def validate_account(account: AccountConfig, index: int) -> bool:
     """验证账号配置（增强版）"""
     if not account.auth_configs:
@@ -244,14 +314,11 @@ def validate_account(account: AccountConfig, index: int) -> bool:
                 logger.error(f"❌ Account {index + 1} ({account.name}): Username must be a non-empty string")
                 return False
 
-            # 添加密码强度检查
-            if len(auth.password) < 6:
-                logger.warning(f"⚠️ Account {index + 1} ({account.name}): Password is too short (< 6 characters), may be insecure")
-
-            # 检查密码是否为常见弱密码
-            weak_passwords = ["123456", "password", "123456789", "12345678", "12345", "111111", "qwerty", "abc123"]
-            if auth.password.lower() in weak_passwords:
-                logger.warning(f"⚠️ Account {index + 1} ({account.name}): Password appears to be a common weak password")
+            # 使用增强的密码强度验证
+            is_valid, error_msg = validate_password_strength(auth.password, account.name, index)
+            if not is_valid:
+                logger.error(f"❌ Account {index + 1} ({account.name}): {error_msg}")
+                return False
 
         else:
             logger.error(f"❌ Account {index + 1} ({account.name}): Unknown auth method '{auth.method.value}'")
