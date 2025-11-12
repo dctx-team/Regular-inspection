@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
 from datetime import datetime
@@ -114,8 +115,51 @@ def validate_env_vars():
     return True
 
 
+def cleanup_old_logs(log_dir: str, days: int = 30) -> int:
+    """清理旧日志文件（保留最近N天）
+
+    Args:
+        log_dir: 日志目录
+        days: 保留天数
+
+    Returns:
+        删除的日志文件数量
+    """
+    try:
+        from pathlib import Path
+        import time
+
+        log_path = Path(log_dir)
+        if not log_path.exists():
+            return 0
+
+        cutoff_time = time.time() - (days * 24 * 60 * 60)
+        deleted_count = 0
+
+        for log_file in log_path.glob("checkin_*.log*"):
+            # 检查文件修改时间
+            if log_file.stat().st_mtime < cutoff_time:
+                try:
+                    log_file.unlink()
+                    deleted_count += 1
+                except (OSError, PermissionError) as e:
+                    # 文件正在被使用或权限不足，跳过
+                    pass
+
+        if deleted_count > 0:
+            logger = logging.getLogger(__name__)
+            logger.info(f"🗑️ 已清理 {deleted_count} 个超过 {days} 天的旧日志文件")
+
+        return deleted_count
+
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.debug(f"清理旧日志失败: {e}")
+        return 0
+
+
 def setup_logging():
-    """配置日志系统"""
+    """配置日志系统（支持日志轮转）"""
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
 
@@ -125,12 +169,20 @@ def setup_logging():
     log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
 
-    # 配置logging
+    # 配置logging - 使用 RotatingFileHandler 实现日志轮转
+    # maxBytes: 10MB, backupCount: 5 个备份文件
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+
     logging.basicConfig(
         level=log_level,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
+            file_handler,
             logging.StreamHandler(sys.stdout)
         ]
     )
@@ -138,6 +190,9 @@ def setup_logging():
     logger = logging.getLogger(__name__)
     if log_level_str != "INFO":
         logger.info(f"ℹ️ 日志级别已设置为: {log_level_str}")
+
+    # 清理旧日志文件（保留最近30天）
+    cleanup_old_logs(log_dir, days=30)
 
     return logger
 
