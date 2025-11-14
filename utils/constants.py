@@ -104,6 +104,10 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY = 2  # 秒
 DEFAULT_RETRY_BACKOFF = 2  # 指数退避倍数
 
+# 速率限制保护延迟（秒）
+RATE_LIMIT_DELAY_MIN = 1  # 最小延迟
+RATE_LIMIT_DELAY_MAX = 3  # 最大延迟
+
 
 # ==================== 余额转换 ====================
 # 余额单位转换率（内部单位 -> 美元）
