@@ -585,7 +585,7 @@ class ProxyManager:
 
         自动检测以下环境变量:
         - USE_PROXY=true (显式启用)
-        - SUBSCRIPTION_PROXY_URL (订阅代理模式)
+        - PROXY_SUBSCRIPTION_URL (订阅代理模式)
         - PROXY_SERVER (直接代理模式)
 
         Returns:
@@ -598,7 +598,7 @@ class ProxyManager:
             return True
 
         # 方式2: 配置了订阅代理URL
-        if os.getenv('SUBSCRIPTION_PROXY_URL'):
+        if os.getenv('PROXY_SUBSCRIPTION_URL'):
             return True
 
         # 方式3: 配置了直接代理服务器
