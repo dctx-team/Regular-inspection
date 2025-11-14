@@ -36,6 +36,8 @@ from utils.constants import (
     DEFAULT_RETRY_BACKOFF,
     QUOTA_TO_DOLLAR_RATE,
     WAF_COOKIE_NAMES,
+    RATE_LIMIT_DELAY_MIN,
+    RATE_LIMIT_DELAY_MAX,
 )
 from utils.enhanced_stealth import EnhancedStealth, ProxyManager, StealthConfig
 
@@ -527,9 +529,9 @@ class CheckIn:
     async def _do_checkin(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Dict[str, Any]:
         """执行签到请求（带重试机制和速率限制保护）"""
         try:
-            # 添加随机延迟，避免触发速率限制（1-3秒）
+            # 添加随机延迟，避免触发速率限制
             import random
-            delay = random.uniform(1, 3)
+            delay = random.uniform(RATE_LIMIT_DELAY_MIN, RATE_LIMIT_DELAY_MAX)
             self.logger.debug(f"⏱️ [{self.account.name}] 速率限制保护延迟 {delay:.2f}秒")
             await asyncio.sleep(delay)
 

@@ -55,3 +55,8 @@ htmlcov/
 # Docker
 *.tar
 .claude/settings.local.json
+
+# 备份文件
+*.bak
+*.tmp
+*.old
