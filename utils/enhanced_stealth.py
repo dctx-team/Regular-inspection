@@ -583,11 +583,29 @@ class ProxyManager:
         """
         判断是否应该使用代理
 
+        自动检测以下环境变量:
+        - USE_PROXY=true (显式启用)
+        - SUBSCRIPTION_PROXY_URL (订阅代理模式)
+        - PROXY_SERVER (直接代理模式)
+
         Returns:
             bool: 是否使用代理
         """
         import os
-        return os.getenv('USE_PROXY', 'false').lower() == 'true'
+
+        # 方式1: 显式启用
+        if os.getenv('USE_PROXY', 'false').lower() == 'true':
+            return True
+
+        # 方式2: 配置了订阅代理URL
+        if os.getenv('SUBSCRIPTION_PROXY_URL'):
+            return True
+
+        # 方式3: 配置了直接代理服务器
+        if os.getenv('PROXY_SERVER'):
+            return True
+
+        return False
 
     @staticmethod
     def clear_subscription_cache():
