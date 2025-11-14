@@ -220,7 +220,15 @@ def validate_password_strength(password: str, account_name: str, index: int) -> 
 
     Returns:
         (is_valid, error_message): 验证结果和错误消息
+
+    环境变量:
+        SKIP_PASSWORD_VALIDATION: 设置为 'true' 可跳过密码强度验证（不推荐，仅用于测试账号）
     """
+    # 检查是否跳过密码验证
+    if os.getenv('SKIP_PASSWORD_VALIDATION', 'false').lower() == 'true':
+        logger.warning(f"⚠️ Account {index + 1} ({account_name}): 密码强度验证已跳过（SKIP_PASSWORD_VALIDATION=true）")
+        return True, None
+
     # 检查密码最小长度
     if len(password) < 6:
         return False, f"密码长度不足（当前 {len(password)} 字符，最少需要 6 字符）"
@@ -257,12 +265,18 @@ def validate_password_strength(password: str, account_name: str, index: int) -> 
             f"(建议包含大写、小写、数字、特殊字符中的至少 2 种)"
         )
 
-    # 检查是否为纯数字或纯字母（长度>=8时仅警告，长度<8时拒绝）
+    # 检查是否为纯数字或纯字母（长度>=8时仅警告，长度<8时警告但不拒绝）
     if password.isdigit() and len(password) < 8:
-        return False, f"密码过于简单（纯数字且长度 < 8，存在安全风险）"
+        logger.warning(
+            f"⚠️ Account {index + 1} ({account_name}): 密码为纯数字且长度 < 8，安全性较低 "
+            f"(提示: 可设置 SKIP_PASSWORD_VALIDATION=true 跳过验证)"
+        )
 
     if password.isalpha() and len(password) < 8:
-        return False, f"密码过于简单（纯字母且长度 < 8，存在安全风险）"
+        logger.warning(
+            f"⚠️ Account {index + 1} ({account_name}): 密码为纯字母且长度 < 8，安全性较低 "
+            f"(提示: 可设置 SKIP_PASSWORD_VALIDATION=true 跳过验证)"
+        )
 
     # 检查重复字符（如 "111111", "aaaaaa"）
     if len(set(password)) <= 2 and len(password) >= 6:
