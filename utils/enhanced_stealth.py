@@ -537,10 +537,15 @@ class ProxyManager:
             try:
                 # 创建或复用订阅���理器实例
                 if ProxyManager._subscription_manager is None:
-                    selection_mode = os.getenv('PROXY_SELECTION_MODE', 'auto').lower()
-                    node_name_pattern = os.getenv('PROXY_NODE_NAME')
-                    test_speed = os.getenv('PROXY_TEST_SPEED', 'true').lower() == 'true'
-                    cache_duration = int(os.getenv('PROXY_CACHE_DURATION', '3600'))
+                    # 处理GitHub Secrets空字符串问题：空字符串应该使用默认值
+                    selection_mode = (os.getenv('PROXY_SELECTION_MODE', 'auto') or 'auto').lower()
+                    node_name_pattern = os.getenv('PROXY_NODE_NAME') or None
+
+                    test_speed_env = os.getenv('PROXY_TEST_SPEED', 'true') or 'true'
+                    test_speed = test_speed_env.lower() == 'true'
+
+                    cache_duration_env = os.getenv('PROXY_CACHE_DURATION', '3600') or '3600'
+                    cache_duration = int(cache_duration_env)
 
                     ProxyManager._subscription_manager = SubscriptionProxyManager(
                         subscription_url=subscription_url,
