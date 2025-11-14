@@ -37,6 +37,7 @@ from utils.constants import (
     QUOTA_TO_DOLLAR_RATE,
     WAF_COOKIE_NAMES,
 )
+from utils.enhanced_stealth import EnhancedStealth, ProxyManager, StealthConfig
 
 
 def performance_monitor(func):
@@ -199,16 +200,28 @@ class CheckIn:
                     timeout_base = int(timeout_base * timeout_multiplier)
                     self.logger.info(f"ℹ️ [{self.account.name}] CI环境超时调整为 {timeout_base/1000}秒 (倍增器: {timeout_multiplier})")
 
+                # 获取代理配置（如果启用，支持订阅模式）
+                proxy_config = None
+                if ProxyManager.should_use_proxy():
+                    # 优先使用异步方法（支持订阅），回退到同步方法（直接配置）
+                    proxy_config = await ProxyManager.get_proxy_config_async()
+                    if proxy_config:
+                        self.logger.info(f"🌐 [{self.account.name}] 启用代理: {proxy_config['server']}")
+
+                # 使用增强的浏览器参数
+                browser_args = EnhancedStealth.get_enhanced_browser_args()
+
                 context = await self._playwright.chromium.launch_persistent_context(
                     user_data_dir=temp_dir,
                     headless=headless_mode,
                     user_agent=BROWSER_USER_AGENT,
                     viewport=BROWSER_VIEWPORT,
-                    args=BROWSER_LAUNCH_ARGS,
+                    args=browser_args,
                     slow_mo=100 if not is_ci else 0,  # CI 环境不需要减速
                     timeout=timeout_base,
+                    proxy=proxy_config,  # 添加代理支持
                 )
-                self.logger.info(f"✅ [{self.account.name}] 浏览器上下文启动成功 (headless={headless_mode})")
+                self.logger.info(f"✅ [{self.account.name}] 浏览器上下文启动成功 (headless={headless_mode}, proxy={bool(proxy_config)})")
             except Exception as e:
                 self.logger.error(f"❌ [{self.account.name}] 浏览器上下文启动失败: {e}")
                 return False, {"error": f"Browser launch failed: {str(e)}"}
@@ -217,89 +230,10 @@ class CheckIn:
                 page = await context.new_page()
                 self.logger.debug(f"✅ [{self.account.name}] 新页面创建成功")
 
-                # 注入反检测脚本（绕过 Cloudflare 等人机验证）
-                self.logger.debug(f"🔧 [{self.account.name}] 注入反检测脚本...")
-                await page.add_init_script("""
-                    // ==================== 核心反检测脚本 ====================
-
-                    // 1. 移除 webdriver 标志（最重要）
-                    Object.defineProperty(navigator, 'webdriver', {
-                        get: () => undefined
-                    });
-
-                    // 2. 覆盖 Chrome 自动化标志
-                    delete navigator.__proto__.webdriver;
-
-                    // 3. 伪装 plugins（headless 默认为空）
-                    Object.defineProperty(navigator, 'plugins', {
-                        get: () => [
-                            {
-                                0: {type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format"},
-                                name: "Chrome PDF Plugin",
-                                length: 1
-                            },
-                            {
-                                0: {type: "application/pdf", suffixes: "pdf", description: "Portable Document Format"},
-                                name: "Chromium PDF Plugin",
-                                length: 1
-                            }
-                        ]
-                    });
-
-                    // 4. 伪装 languages（更真实的语言列表）
-                    Object.defineProperty(navigator, 'languages', {
-                        get: () => ['zh-CN', 'zh', 'en-US', 'en']
-                    });
-
-                    // 5. 伪装 permissions（headless 模式下会暴露）
-                    const originalQuery = window.navigator.permissions.query;
-                    window.navigator.permissions.query = (parameters) => (
-                        parameters.name === 'notifications' ?
-                            Promise.resolve({state: Notification.permission}) :
-                            originalQuery(parameters)
-                    );
-
-                    // 6. 伪装 Chrome 特性
-                    window.chrome = {
-                        runtime: {},
-                        loadTimes: function() {},
-                        csi: function() {},
-                        app: {}
-                    };
-
-                    // 7. 修复 iframe contentWindow（headless 特征）
-                    Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
-                        get: function() {
-                            return window;
-                        }
-                    });
-
-                    // 8. 伪装 connection（headless 通常显示为 'none'）
-                    Object.defineProperty(navigator, 'connection', {
-                        get: () => ({
-                            effectiveType: '4g',
-                            rtt: 50,
-                            downlink: 10,
-                            saveData: false
-                        })
-                    });
-
-                    // 9. 伪装 battery API
-                    Object.defineProperty(navigator, 'getBattery', {
-                        get: () => () => Promise.resolve({
-                            charging: true,
-                            chargingTime: 0,
-                            dischargingTime: Infinity,
-                            level: 1
-                        })
-                    });
-
-                    // 10. 伪装时区偏移（防止服务器端检测）
-                    Date.prototype.getTimezoneOffset = function() {
-                        return -480; // 中国时区 UTC+8
-                    };
-                """)
-                self.logger.info(f"✅ [{self.account.name}] 反检测脚本注入成功")
+                # 注入增强版反检测脚本（2025版，20+特征）
+                self.logger.debug(f"🔧 [{self.account.name}] 注入增强版反检测脚本...")
+                await EnhancedStealth.inject_stealth_scripts(page)
+                self.logger.info(f"✅ [{self.account.name}] 增强版反检测脚本注入成功（20+特征）")
             except Exception as e:
                 self.logger.error(f"❌ [{self.account.name}] 创建页面失败: {e}")
                 await context.close()
@@ -314,6 +248,15 @@ class CheckIn:
                         self.logger.warning(f"⚠️ [{self.account.name}] 未获取到 WAF cookies，继续尝试")
                 else:
                     self.logger.info(f"ℹ️ [{self.account.name}] AgentRouter 不需要 WAF cookies，跳过")
+
+                # 步骤 1.5: 可选的人类行为模拟（支持全局和按认证方式定制）
+                if StealthConfig.should_enable_behavior_simulation(auth_config.method.value):
+                    self.logger.info(f"🤖 [{self.account.name}] 开始模拟人类行为（{auth_config.method.value}）...")
+                    try:
+                        await EnhancedStealth.simulate_reading_behavior(page)
+                        self.logger.info(f"✅ [{self.account.name}] 人类行为模拟完成")
+                    except Exception as e:
+                        self.logger.warning(f"⚠️ [{self.account.name}] 行为模拟失败: {e}")
 
                 # 步骤 2: 执行认证
                 authenticator = get_authenticator(self.account.name, auth_config, self.provider)

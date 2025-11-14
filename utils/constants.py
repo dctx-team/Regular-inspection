@@ -41,6 +41,63 @@ BROWSER_NETWORK_IDLE_TIMEOUT = 10000  # 10秒
 BROWSER_ELEMENT_WAIT_TIMEOUT = 5000  # 5秒
 
 
+# ==================== 超时配置类 ====================
+class TimeoutConfig:
+    """统一的超时时间配置（毫秒）"""
+
+    # ===== 短等待（1-3秒） =====
+    VERY_SHORT_WAIT = 300       # 300ms - 关闭弹窗等快速操作
+    SHORT_WAIT = 1000           # 1秒 - 按钮点击后等待
+    SHORT_WAIT_2 = 2000         # 2秒 - 页面元素加载
+    SHORT_WAIT_3 = 3000         # 3秒 - 页面内容加载
+
+    # ===== 中等待（5-10秒） =====
+    MEDIUM_WAIT = 5000          # 5秒 - OAuth回调等待
+    MEDIUM_WAIT_10 = 10000      # 10秒 - 会话cookies设置
+
+    # ===== 长等待（15-30秒） =====
+    LONG_WAIT_15 = 15000        # 15秒 - CI环境Cloudflare等待
+    LONG_WAIT_20 = 20000        # 20秒 - 页面加载超时
+    LONG_WAIT_25 = 25000        # 25秒 - 登录验证等待
+    LONG_WAIT_30 = 30000        # 30秒 - OAuth流程超时
+
+    # ===== 超长等待（45-120秒） =====
+    EXTRA_LONG_45 = 45000       # 45秒 - 授权按钮等待
+    EXTRA_LONG_60 = 60000       # 60秒 - Cloudflare验证基础时间
+    EXTRA_LONG_90 = 90000       # 90秒 - 重试等待
+    EXTRA_LONG_120 = 120000     # 120秒 - 验证挑战超时
+
+    # ===== 重试等待间隔（毫秒） =====
+    RETRY_WAIT_SHORT = 1500     # 1.5秒 - Cloudflare检查间隔
+    RETRY_WAIT_MEDIUM = 3000    # 3秒 - 长时间检查间隔
+    RETRY_WAIT_LONG = 5000      # 5秒 - 分段检测间隔
+    RETRY_WAIT_10S = 10000      # 10秒 - OAuth参数获取重试
+    RETRY_WAIT_20S = 20000      # 20秒 - 重试策略等待
+
+    # ===== 特殊场景超时 =====
+    CLOUDFLARE_CHECK = 60000    # 60秒 - Cloudflare验证检测
+    PAGE_LOAD = 45000           # 45秒 - goto页面加载
+    NETWORK_IDLE = 10000        # 10秒 - 网络空闲等待
+    ELEMENT_WAIT = 5000         # 5秒 - 元素等待
+
+    @classmethod
+    def get_ci_adjusted(cls, base_timeout: int, multiplier: float = 2.0) -> int:
+        """
+        获取CI环境调整后的超时时间
+
+        Args:
+            base_timeout: 基础超时时间（毫秒）
+            multiplier: CI环境倍增器（默认2.0）
+
+        Returns:
+            int: 调整后的超时时间（毫秒）
+        """
+        from utils.ci_config import CIConfig
+        if CIConfig.is_ci_environment():
+            return int(base_timeout * multiplier)
+        return base_timeout
+
+
 # ==================== 重试配置 ====================
 # 异步重试装饰器默认配置
 DEFAULT_MAX_RETRIES = 3
