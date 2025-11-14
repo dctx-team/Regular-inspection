@@ -316,10 +316,41 @@ class NodeSpeedTester:
 class NodeSelector:
     """节点选择器 - 支持多种选择策略"""
 
+    # 港澳台地区关键词（优先级地区）
+    PREFERRED_REGIONS = [
+        # 香港
+        r'香港|hong\s*kong|hongkong|\bhk\b',
+        # 澳门
+        r'澳[门門]|macau|macao|\bmo\b',
+        # 台湾
+        r'台[湾灣]|taiwan|\btw\b'
+    ]
+
+    @staticmethod
+    def is_preferred_region(node_name: str) -> bool:
+        """
+        判断节点是否属于港澳台地区（优先地区）
+
+        Args:
+            node_name: 节点名称
+
+        Returns:
+            bool: 是否属于港澳台地区
+        """
+        node_name_lower = node_name.lower()
+        for pattern in NodeSelector.PREFERRED_REGIONS:
+            if re.search(pattern, node_name_lower):
+                return True
+        return False
+
     @staticmethod
     def select_fastest(nodes: List[ProxyNode], top_n: int = 1) -> Optional[ProxyNode]:
         """
-        选择最快的节点
+        选择最快的节点（优先港澳台地区）
+
+        优先级策略：
+        1. 港澳台节点延迟 - 50ms bonus（虚拟降低延迟排序）
+        2. 从调整后最快的 top_n 个节点中随机选择
 
         Args:
             nodes: 节点列表（应该已测速）
@@ -334,11 +365,28 @@ class NodeSelector:
             logger.warning("⚠️ 没有可用节点")
             return None
 
+        # 为港澳台节点计算优先级排序分数（延迟 - 50ms bonus）
+        def get_sort_score(node: ProxyNode) -> int:
+            base_latency = node.latency or 9999
+            # 港澳台节点给予50ms的优先级bonus
+            if NodeSelector.is_preferred_region(node.name):
+                return max(0, base_latency - 50)
+            return base_latency
+
+        # 按优先级分数排序
+        available_sorted = sorted(available, key=get_sort_score)
+
+        # 统计港澳台节点数量
+        preferred_count = sum(1 for n in available_sorted[:top_n] if NodeSelector.is_preferred_region(n.name))
+        if preferred_count > 0:
+            logger.info(f"🌏 前{top_n}个候选节点中包含 {preferred_count} 个港澳台节点")
+
         # 从最快的 top_n 个节点中随机选择
-        candidates = available[:min(top_n, len(available))]
+        candidates = available_sorted[:min(top_n, len(available_sorted))]
         selected = random.choice(candidates)
 
-        logger.info(f"✅ 自动选择节点: {selected.name} ({selected.latency}ms)")
+        region_tag = "🌏 港澳台" if NodeSelector.is_preferred_region(selected.name) else ""
+        logger.info(f"✅ 自动选择节点: {selected.name} ({selected.latency}ms) {region_tag}")
         return selected
 
     @staticmethod
@@ -371,11 +419,15 @@ class NodeSelector:
     @staticmethod
     def select_random(nodes: List[ProxyNode], only_available: bool = True) -> Optional[ProxyNode]:
         """
-        随机选择节点
+        随机选择节点（港澳台节点权重加倍）
+
+        加权策略：
+        - 港澳台节点权重：2.0
+        - 其他节点权重：1.0
 
         Args:
             nodes: 节点列表
-            only_available: 仅从可用节点中选择���需要先测速）
+            only_available: 仅从可用节点中选择（需要先测速）
 
         Returns:
             ProxyNode or None
@@ -392,8 +444,25 @@ class NodeSelector:
             logger.warning("⚠️ 节点列表为空")
             return None
 
-        selected = random.choice(available)
-        logger.info(f"✅ 随机选择节点: {selected.name}")
+        # 计算每个节点的权重
+        weights = []
+        preferred_count = 0
+        for node in available:
+            if NodeSelector.is_preferred_region(node.name):
+                weights.append(2.0)  # 港澳台节点权重加倍
+                preferred_count += 1
+            else:
+                weights.append(1.0)  # 其他节点基础权重
+
+        # 统计信息
+        if preferred_count > 0:
+            logger.info(f"🌏 候选节点中包含 {preferred_count}/{len(available)} 个港澳台节点（权重2倍）")
+
+        # 使用 random.choices 进行加权随机选择
+        selected = random.choices(available, weights=weights, k=1)[0]
+
+        region_tag = "🌏 港澳台" if NodeSelector.is_preferred_region(selected.name) else ""
+        logger.info(f"✅ 随机选择节点: {selected.name} {region_tag}")
         return selected
 
 
