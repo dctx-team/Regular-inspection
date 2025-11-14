@@ -178,6 +178,15 @@ Cookie 过期? → 自动重新认证
 
    进入 `Actions` → 选择工作流 → `Enable workflow`
 
+5. **（可选）配置额外选项**
+
+   根据需要添加以下环境变量：
+   - `CI_DISABLED_AUTH_METHODS=github,linux.do` - 禁用 CI 环境中易失败的认证方式
+   - `SUBSCRIPTION_PROXY_URL` - 订阅代理链接（支持 Clash/V2Ray/SIP002）
+   - `SESSION_CACHE_KEY` - 会话缓存加密密钥
+
+   详见 [环境变量配置](#环境变量配置)
+
 ### 方式二：本地运行
 
 ```bash
@@ -445,6 +454,16 @@ PROVIDERS='{
 | `AGENTROUTER_ACCOUNTS` | AgentRouter 账号配置（JSON数组） | 否* |
 | `ACCOUNTS` | 统一账号配置（支持多 Provider）| 否* |
 | `PROVIDERS` | 自定义 Provider 配置 | 否 |
+| `CI_DISABLED_AUTH_METHODS` | CI 环境禁用的认证方式（逗号分隔，如 `github,linux.do`） | 否 |
+| `SESSION_CACHE_KEY` | 会话缓存加密密钥（建议设置） | 否 |
+| **代理配置** | | |
+| `SUBSCRIPTION_PROXY_URL` | 订阅代理链接（支持 Clash/V2Ray/SIP002 格式） | 否 |
+| `PROXY_SELECTION_MODE` | 节点选择模式：`auto`（自动选最快）/`manual`（正则匹配）/`random`（随机） | 否 |
+| `PROXY_MANUAL_REGEX` | 手动模式的节点名称匹配正则（如 `香港|HK|台湾|TW`） | 否 |
+| `PROXY_SERVER` | 直接代理服务器（格式：`http://host:port` 或 `socks5://host:port`） | 否 |
+| `PROXY_USERNAME` | 代理服务器用户名 | 否 |
+| `PROXY_PASSWORD` | 代理服务器密码 | 否 |
+| **通知配置** | | |
 | `EMAIL_USER` | 邮件发送地址 | 否 |
 | `EMAIL_PASS` | 邮件密码/授权码 | 否 |
 | `EMAIL_TO` | 邮件接收地址 | 否 |
@@ -456,6 +475,37 @@ PROVIDERS='{
 | `WEIXIN_WEBHOOK` | 企业微信 Webhook | 否 |
 
 *至少需要配置一种账号配置方式
+
+### 代理配置说明
+
+支持两种代理配置方式：
+
+#### 方式 1：订阅代理（推荐）
+
+```bash
+# 支持 Clash YAML / V2Ray Base64 / SIP002 URI 格式
+SUBSCRIPTION_PROXY_URL=https://your-proxy-subscription-url
+
+# 节点选择模式（可选，默认 auto）
+PROXY_SELECTION_MODE=auto        # 自动测速选择最快节点
+# 或
+PROXY_SELECTION_MODE=manual      # 使用正则表达式匹配
+PROXY_MANUAL_REGEX=香港|HK|台湾|TW
+# 或
+PROXY_SELECTION_MODE=random      # 随机选择节点
+```
+
+#### 方式 2：直接代理
+
+```bash
+# HTTP 代理
+PROXY_SERVER=http://127.0.0.1:7890
+
+# SOCKS5 代理（带认证）
+PROXY_SERVER=socks5://127.0.0.1:1080
+PROXY_USERNAME=your_username
+PROXY_PASSWORD=your_password
+```
 
 ## 定时设置
 
@@ -561,6 +611,7 @@ Regular-inspection/
 3. **WAF 拦截** - 脚本自动处理
 4. **通知未收到** - 检查配置，默认仅失败、首次运行或余额变化时通知
 5. **Actions 未执行** - 启用工作流，注意延迟正常
+6. **CI 环境 OAuth 认证失败** - 建议配置 `CI_DISABLED_AUTH_METHODS=github,linux.do` 或改用 Cookies 认证
 
 > 💡 **提示：** "签到成功" 表示账号登录有效，已完成保活操作！
 
