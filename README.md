@@ -479,12 +479,20 @@ Regular-inspection/
 ├── checkin.py                 # 签到核心逻辑（浏览器复用）
 ├── utils/
 │   ├── config.py              # 配置管理（数据类）
-│   ├── auth.py                # 认证实现（含 2FA 支持）
+│   ├── auth/                  # 认证模块（模块化架构）
+│   │   ├── __init__.py        # 认证器工厂方法
+│   │   ├── base.py            # 认证器基类（含重试逻辑）
+│   │   ├── cookies.py         # Cookies 认证实现
+│   │   ├── email.py           # 邮箱密码认证实现
+│   │   ├── github.py          # GitHub OAuth 认证（含 2FA）
+│   │   └── linuxdo.py         # Linux.do OAuth 认证
 │   ├── notify.py              # 通知模块
 │   ├── logger.py              # 统一日志系统
 │   ├── validator.py           # 配置验证工具
-│   ├── constants.py           # 全局常量管理
-│   └── sanitizer.py           # 敏感信息脱敏
+│   ├── constants.py           # 全局常量管理（含 TimeoutConfig）
+│   ├── sanitizer.py           # 敏感信息脱敏
+│   ├── session_cache.py       # 会话缓存管理
+│   └── enhanced_stealth.py    # 高级反检测技术
 ├── pyproject.toml             # 项目配置
 ├── .env.example               # 环境变量模板
 ├── .github/
