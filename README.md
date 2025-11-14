@@ -456,13 +456,18 @@ PROVIDERS='{
 | `PROVIDERS` | 自定义 Provider 配置 | 否 |
 | `CI_DISABLED_AUTH_METHODS` | CI 环境禁用的认证方式（逗号分隔，如 `github,linux.do`） | 否 |
 | `SESSION_CACHE_KEY` | 会话缓存加密密钥（建议设置） | 否 |
-| **代理配置** | | |
-| `SUBSCRIPTION_PROXY_URL` | 订阅代理链接（支持 Clash/V2Ray/SIP002 格式） | 否 |
+| **代理配置（可选）** | | |
+| `USE_PROXY` | 全局启用代理（设置为 `true` 启用） | 否 |
+| `PROXY_SUBSCRIPTION_URL` | 订阅代理链接（支持 Clash/V2Ray/SIP002 格式） | 否 |
 | `PROXY_SELECTION_MODE` | 节点选择模式：`auto`（自动选最快）/`manual`（正则匹配）/`random`（随机） | 否 |
-| `PROXY_MANUAL_REGEX` | 手动模式的节点名称匹配正则（如 `香港|HK|台湾|TW`） | 否 |
+| `PROXY_NODE_NAME` | 手动模式的节点名称匹配正则（如 `香港\|HK\|台湾\|TW`） | 否 |
+| `PROXY_TEST_SPEED` | 是否启用测速（`true`/`false`，默认 `true`） | 否 |
+| `PROXY_CACHE_DURATION` | 节点缓存时长（秒，默认 `3600`） | 否 |
 | `PROXY_SERVER` | 直接代理服务器（格式：`http://host:port` 或 `socks5://host:port`） | 否 |
-| `PROXY_USERNAME` | 代理服务器用户名 | 否 |
-| `PROXY_PASSWORD` | 代理服务器密码 | 否 |
+| `PROXY_USER` | 代理服务器用��名 | 否 |
+| `PROXY_PASS` | 代理服务器密码 | 否 |
+| `PROXY_METHODS` | 仅为指定认证方式启用代理（逗号分隔，如 `github,linux.do`） | 否 |
+| `NO_PROXY_METHODS` | 为指定认证方式禁用代理（逗号分隔，如 `cookies,email`） | 否 |
 | **通知配置** | | |
 | `EMAIL_USER` | 邮件发送地址 | 否 |
 | `EMAIL_PASS` | 邮件密码/授权码 | 否 |
@@ -478,34 +483,89 @@ PROVIDERS='{
 
 ### 代理配置说明
 
-支持两种代理配置方式：
+**代理功能完全可选**：不配置代理相关的环境变量，脚本将正常运行不使用代理。
+
+支持三种代理配置方式：
 
 #### 方式 1：订阅代理（推荐）
 
-```bash
-# 支持 Clash YAML / V2Ray Base64 / SIP002 URI 格式
-SUBSCRIPTION_PROXY_URL=https://your-proxy-subscription-url
+**优点**：
+- 支持 Clash YAML / V2Ray Base64 / SIP002 URI 格���
+- 自动选择最优节点
+- 节点缓存，减少重复解析
 
-# 节点选择模式（可选，默认 auto）
-PROXY_SELECTION_MODE=auto        # 自动测速选择最快节点
-# 或
-PROXY_SELECTION_MODE=manual      # 使用正则表达式匹配
-PROXY_MANUAL_REGEX=香港|HK|台湾|TW
-# 或
-PROXY_SELECTION_MODE=random      # 随机选择节点
+**配置示例**：
+
+```bash
+# 启用代理
+USE_PROXY=true
+
+# 订阅链接
+PROXY_SUBSCRIPTION_URL=https://your-proxy-subscription-url
+
+# 方案 A：自动选择最快节点（默认）
+PROXY_SELECTION_MODE=auto
+PROXY_TEST_SPEED=true
+
+# 方案 B：手动正则匹配节点
+PROXY_SELECTION_MODE=manual
+PROXY_NODE_NAME=香港|HK|台湾|TW
+
+# 方案 C：随机选择节点
+PROXY_SELECTION_MODE=random
+
+# 可选：节点缓存时长（默认 3600 秒）
+PROXY_CACHE_DURATION=3600
 ```
 
 #### 方式 2：直接代理
 
 ```bash
+# 启用代理
+USE_PROXY=true
+
 # HTTP 代理
 PROXY_SERVER=http://127.0.0.1:7890
 
 # SOCKS5 代理（带认证）
 PROXY_SERVER=socks5://127.0.0.1:1080
-PROXY_USERNAME=your_username
-PROXY_PASSWORD=your_password
+PROXY_USER=your_username
+PROXY_PASS=your_password
 ```
+
+#### 方式 3：细粒度控制
+
+**仅为特定认证方式启用代理**（推荐用于 CI 环境）：
+
+```bash
+# 仅为 GitHub 和 Linux.do OAuth 启用代理
+PROXY_METHODS=github,linux.do
+PROXY_SERVER=http://127.0.0.1:7890
+```
+
+**全局启用，但排除特定方式**：
+
+```bash
+# 全局启用代理
+USE_PROXY=true
+PROXY_SERVER=http://127.0.0.1:7890
+
+# 但 Cookies 和 Email 认证不使用代理
+NO_PROXY_METHODS=cookies,email
+```
+
+#### GitHub Actions 配置
+
+在 GitHub Secrets 中添加以下变量即可启用代理：
+
+| Secret 名称 | 说明 | 示例 |
+|------------|------|------|
+| `USE_PROXY` | 启用代理 | `true` |
+| `PROXY_SUBSCRIPTION_URL` | 订阅链接 | `https://...` |
+| `PROXY_SELECTION_MODE` | 选择模式（可选） | `auto` |
+| `PROXY_SERVER` | 直接代理（可选） | `http://127.0.0.1:7890` |
+
+**不配置任何代理 Secrets，脚本将不使用代理。**
 
 ## 定时设置
 

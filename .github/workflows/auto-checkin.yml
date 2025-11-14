@@ -58,10 +58,13 @@ jobs:
 
       - name: 执行签到
         env:
+          # 账号配置
           ANYROUTER_ACCOUNTS: ${{ secrets.ANYROUTER_ACCOUNTS }}
           AGENTROUTER_ACCOUNTS: ${{ secrets.AGENTROUTER_ACCOUNTS }}
           ACCOUNTS: ${{ secrets.ACCOUNTS }}
           PROVIDERS: ${{ secrets.PROVIDERS }}
+
+          # 通知配置
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
@@ -71,6 +74,25 @@ jobs:
           WEIXIN_WEBHOOK: ${{ secrets.WEIXIN_WEBHOOK }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           SERVERPUSHKEY: ${{ secrets.SERVERPUSHKEY }}
+
+          # 代理配置（可选 - 如果不配置则不使用代理）
+          USE_PROXY: ${{ secrets.USE_PROXY }}
+
+          # 订阅代理模式（推荐）
+          PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
+          PROXY_SELECTION_MODE: ${{ secrets.PROXY_SELECTION_MODE }}
+          PROXY_NODE_NAME: ${{ secrets.PROXY_NODE_NAME }}
+          PROXY_TEST_SPEED: ${{ secrets.PROXY_TEST_SPEED }}
+          PROXY_CACHE_DURATION: ${{ secrets.PROXY_CACHE_DURATION }}
+
+          # 直接代理模式
+          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+          PROXY_USER: ${{ secrets.PROXY_USER }}
+          PROXY_PASS: ${{ secrets.PROXY_PASS }}
+
+          # 代理细粒度控制
+          PROXY_METHODS: ${{ secrets.PROXY_METHODS }}
+          NO_PROXY_METHODS: ${{ secrets.NO_PROXY_METHODS }}
         run: |
           python main.py
 
