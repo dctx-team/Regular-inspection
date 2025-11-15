@@ -56,6 +56,69 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
+      - name: 设置 Clash 代理（可选）
+        if: ${{ secrets.PROXY_SUBSCRIPTION_URL != '' }}
+        run: |
+          echo "=== 📡 开始配置 Clash 代理 ==="
+
+          # 下载 Clash Premium
+          echo "📥 下载 Clash Premium..."
+          wget -O clash.gz https://github.com/Dreamacro/clash/releases/download/premium/clash-linux-amd64-2023.08.17.gz
+          gunzip clash.gz
+          chmod +x clash
+
+          # 生成 Clash 配置文件
+          echo "📝 生成 Clash 配置..."
+          cat > config.yaml << 'EOF'
+          mixed-port: 7890
+          allow-lan: false
+          mode: rule
+          log-level: info
+          external-controller: 127.0.0.1:9090
+
+          proxy-providers:
+            my-provider:
+              type: http
+              url: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
+              interval: 3600
+              path: ./subscription.yaml
+              health-check:
+                enable: true
+                interval: 300
+                url: http://www.gstatic.com/generate_204
+
+          proxies: []
+
+          proxy-groups:
+            - name: PROXY
+              type: url-test
+              use:
+                - my-provider
+              url: http://www.gstatic.com/generate_204
+              interval: 300
+
+          rules:
+            - MATCH,PROXY
+          EOF
+
+          # 启动 Clash（后台运行）
+          echo "🚀 启动 Clash..."
+          ./clash -f config.yaml &
+          CLASH_PID=$!
+          echo "Clash PID: $CLASH_PID"
+
+          # 等待 Clash 启动完成
+          echo "⏳ 等待 Clash 启动..."
+          sleep 10
+
+          # 测试代理是否可用
+          echo "🔍 测试代理连接..."
+          if curl -x http://127.0.0.1:7890 -s -o /dev/null -w "%{http_code}" https://www.google.com | grep -q "200"; then
+            echo "✅ Clash 代理启动成功"
+          else
+            echo "⚠️ 代理测试失败，但继续执行"
+          fi
+
       - name: 执行签到
         env:
           # 账号配置
@@ -75,24 +138,17 @@ jobs:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           SERVERPUSHKEY: ${{ secrets.SERVERPUSHKEY }}
 
-          # 代理配置（可选 - 如果不配置则不使用代理）
-          USE_PROXY: ${{ secrets.USE_PROXY }}
+          # 代理配置（使用本地 Clash 提供的 HTTP 代理）
+          USE_PROXY: ${{ secrets.PROXY_SUBSCRIPTION_URL != '' && 'true' || 'false' }}
+          PROXY_SERVER: http://127.0.0.1:7890
 
-          # 订阅代理模式（推荐）
-          PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
-          PROXY_SELECTION_MODE: ${{ secrets.PROXY_SELECTION_MODE }}
-          PROXY_NODE_NAME: ${{ secrets.PROXY_NODE_NAME }}
-          PROXY_TEST_SPEED: ${{ secrets.PROXY_TEST_SPEED }}
-          PROXY_CACHE_DURATION: ${{ secrets.PROXY_CACHE_DURATION }}
-
-          # 直接代理模式
-          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
-          PROXY_USER: ${{ secrets.PROXY_USER }}
-          PROXY_PASS: ${{ secrets.PROXY_PASS }}
-
-          # 代理细粒度控制
+          # 代理细粒度控制（可选）
           PROXY_METHODS: ${{ secrets.PROXY_METHODS }}
           NO_PROXY_METHODS: ${{ secrets.NO_PROXY_METHODS }}
+
+          # CI 环境优化
+          CI_DISABLED_AUTH_METHODS: ${{ secrets.CI_DISABLED_AUTH_METHODS }}
+          SESSION_CACHE_KEY: ${{ secrets.SESSION_CACHE_KEY }}
         run: |
           python main.py
 
