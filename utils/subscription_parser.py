@@ -93,6 +93,9 @@ class SubscriptionParser:
         """
         content = await self.fetch_subscription(subscription_url)
 
+        # 添加诊断日志：显示订阅内容前200字符
+        logger.debug(f"📄 订阅内容预览: {content[:200]}")
+
         # 尝试不同的解析方法
         parsers = [
             ("Clash YAML", self._parse_clash),
@@ -106,8 +109,10 @@ class SubscriptionParser:
                 if nodes:
                     logger.info(f"✅ 使用 {parser_name} 格式解析成功，找到 {len(nodes)} 个可用节点")
                     return nodes
+                else:
+                    logger.warning(f"⚠️ {parser_name} 解析成功但未找到HTTP/SOCKS5节点")
             except Exception as e:
-                logger.debug(f"⚠️ {parser_name} 解析失败: {e}")
+                logger.warning(f"⚠️ {parser_name} 解析失败: {e}")
                 continue
 
         logger.warning("⚠️ 所有解析方法均失败，返回空列表")
@@ -118,14 +123,25 @@ class SubscriptionParser:
         try:
             config = yaml.safe_load(content)
 
-            if not config or "proxies" not in config:
+            if not config:
+                logger.warning("❌ YAML解析结果为空")
                 return []
 
-            nodes = []
-            for proxy in config["proxies"]:
-                # 只提取 HTTP 和 SOCKS5 节点
-                proxy_type = proxy.get("type", "").lower()
+            if "proxies" not in config:
+                logger.warning(f"❌ YAML中没有proxies字段，实际字段: {list(config.keys())[:10]}")
+                return []
 
+            total_proxies = len(config["proxies"])
+            logger.info(f"📊 订阅解析成功，找到 {total_proxies} 个代理节点")
+
+            nodes = []
+            type_counts = {}
+            for proxy in config["proxies"]:
+                # 统计节点类型
+                proxy_type = proxy.get("type", "").lower()
+                type_counts[proxy_type] = type_counts.get(proxy_type, 0) + 1
+
+                # 只提取 HTTP 和 SOCKS5 节点
                 if proxy_type in ["http", "https", "socks5"]:
                     node = ProxyNode(
                         name=proxy.get("name", "Unknown"),
@@ -140,10 +156,23 @@ class SubscriptionParser:
                     nodes.append(node)
                     logger.debug(f"  ✅ 解析节点: {node.name} ({node.type})")
 
+            # 显示节点类型统计（使用 WARNING 级别以便在日志中可见）
+            logger.warning(f"📊 节点类型分布: {type_counts}")
+
+            if not nodes:
+                unsupported_types = ', '.join(type_counts.keys())
+                logger.error(f"❌ 订阅中没有 HTTP/SOCKS5 类型节点")
+                logger.error(f"📋 实际节点类型: {unsupported_types}")
+                logger.error(f"💡 Playwright 仅支持 HTTP/HTTPS/SOCKS5 代理")
+                logger.error(f"💡 建议：")
+                logger.error(f"   1. 使用本地 Clash/V2Ray 提供 HTTP 混合端口")
+                logger.error(f"   2. 或使用 PROXY_SERVER 环境变量配置本地代理")
+                logger.error(f"   3. 或禁用代理功能（删除 USE_PROXY 环境变量）")
+
             return nodes
 
         except yaml.YAMLError as e:
-            logger.debug(f"YAML 解析失败: {e}")
+            logger.warning(f"❌ YAML 解析失败: {e}")
             return []
 
     def _parse_v2ray_base64(self, content: str) -> List[ProxyNode]:
