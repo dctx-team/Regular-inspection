@@ -298,10 +298,11 @@ class LinuxDoAuthenticator(Authenticator):
             await page.goto(oauth_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(2000)
 
-            # 第五步：检查是否需要登录
+            # 第五步：检查页面状态
             current_url = page.url
             logger.info(f"🔍 [{self.auth_config.username}] 当前URL: {current_url}")
 
+            # 检查是否需要登录
             if "linux.do" in current_url and "/login" in current_url:
                 # 需要登录
                 logger.info(f"🔐 [{self.auth_config.username}] 需要登录到 Linux.do...")
@@ -493,8 +494,10 @@ class LinuxDoAuthenticator(Authenticator):
                         
                         return {"success": False, "error": "Still on login page - credentials may be invalid or CAPTCHA required"}
                 else:
-                    # 不在登录页面，正常等待授权按钮（增加到45秒）
-                    await page.wait_for_selector('a[href^="/oauth2/approve"]', timeout=45000)
+                    # 不在登录页面，正常等待授权按钮（增加到90秒，CI环境使用倍增器）
+                    is_ci = CIConfig.is_ci_environment()
+                    timeout = 180000 if is_ci else 90000  # CI环境180秒，本地90秒
+                    await page.wait_for_selector('a[href^="/oauth2/approve"]', timeout=timeout)
 
                 allow_btn = await page.query_selector('a[href^="/oauth2/approve"]')
                 if allow_btn:
@@ -505,20 +508,34 @@ class LinuxDoAuthenticator(Authenticator):
 
             except Exception as e:
                 logger.error(f"❌ [{self.auth_config.username}] 等待授权按钮超时: {e}")
-                logger.info(f"   当前URL: {page.url}")
-                
-                # 获取更多调试信息
-                try:
-                    page_title = await page.title()
-                    logger.info(f"   页面标题: {page_title}")
-                    
-                    # 检查页面上是否有其他可用元素
-                    buttons = await page.query_selector_all('button, a.btn')
-                    logger.info(f"   页面上找到 {len(buttons)} 个按钮元素")
-                except Exception as debug_error:
-                    logger.warning(f"   无法获取调试信息: {debug_error}")
-                
-                return {"success": False, "error": f"Authorization button timeout: {sanitize_exception(e)}"}
+
+                # 检查是否已经跳转到回调页面（可能授权已完成）
+                current_url = page.url
+                logger.info(f"   当前URL: {current_url}")
+
+                # 检查URL是否包含OAuth回调或已跳转到目标域名
+                provider_domain = self.provider_config.base_url.replace('https://', '').replace('http://', '')
+                if 'oauth/callback' in current_url or '/oauth/' in current_url or provider_domain in current_url:
+                    logger.info(f"✅ [{self.auth_config.username}] 检测到已跳转到回调页面，授权可能已完成")
+                    # 继续执行后续流程（等待OAuth回调）
+                else:
+                    # 获取更多调试信息
+                    try:
+                        page_title = await page.title()
+                        logger.info(f"   页面标题: {page_title}")
+
+                        # 检查是否需要登录
+                        if 'linux.do/login' in current_url:
+                            logger.error(f"❌ [{self.auth_config.username}] 页面跳转到登录页，可能会话已过期")
+                            return {"success": False, "error": "Session expired - redirected to login page"}
+
+                        # 检查页面上是否有其他可用元素
+                        buttons = await page.query_selector_all('button, a.btn')
+                        logger.info(f"   页面上找到 {len(buttons)} 个按钮元素")
+                    except Exception as debug_error:
+                        logger.warning(f"   无法获取调试信息: {debug_error}")
+
+                    return {"success": False, "error": f"Authorization button timeout: {sanitize_exception(e)}"}
 
             # 第七步：等待OAuth回调
             logger.info(f"⏳ [{self.auth_config.username}] 等待OAuth回调...")
