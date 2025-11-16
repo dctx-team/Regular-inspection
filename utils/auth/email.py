@@ -121,36 +121,38 @@ class EmailAuthenticator(Authenticator):
                 continue
         return None
 
-    async def _check_login_success(self, page: Page) -> Tuple[bool, Optional[str]]:
-        """检查登录是否成功"""
+    async def _check_login_success(self, page: Page, context: BrowserContext) -> Tuple[bool, Optional[str]]:
+        """检查登录是否成功（增强版 - 验证真实 session cookies）"""
         current_url = page.url
         logger.info(f"🔍 [{self.auth_config.username}] 登录后URL: {current_url}")
 
         # 方法1: 检查URL变化
-        if "login" not in current_url.lower():
+        login_in_url = "login" in current_url.lower()
+        if not login_in_url:
             logger.info(f"✅ [{self.auth_config.username}] URL已变化，登录可能成功")
-            return True, None
-
-        logger.warning(f"⚠️ [{self.auth_config.username}] 仍在登录页面，检查其他登录指标...")
+        else:
+            logger.warning(f"⚠️ [{self.auth_config.username}] 仍在登录页面，检查其他登录指标...")
 
         # 方法2: 检查页面标题
+        page_title_indicates_success = False
         try:
             page_title = await page.title()
             logger.info(f"🔍 [{self.auth_config.username}] 页面标题: {page_title}")
             if "login" not in page_title.lower() and "console" in page_title.lower():
                 logger.info(f"✅ [{self.auth_config.username}] 页面标题显示已登录")
-                return True, None
+                page_title_indicates_success = True
         except:
             pass
 
         # 方法3: 检查用户界面元素
+        user_elements_found = False
         try:
             user_elements = await page.query_selector_all(
                 '[class*="user"], [class*="avatar"], [class*="profile"], button:has-text("退出"), button:has-text("Logout")'
             )
             if user_elements:
-                logger.info(f"✅ [{self.auth_config.username}] 找到用户界面元素，登录成功")
-                return True, None
+                logger.info(f"✅ [{self.auth_config.username}] 找到用户界面元素")
+                user_elements_found = True
         except:
             pass
 
@@ -159,9 +161,73 @@ class EmailAuthenticator(Authenticator):
         if error_msg:
             return False, error_msg
 
-        # 仍在登录页
-        if "login" in current_url.lower():
+        # ==================== 增强验证（2025版）：验证真实 session cookies ====================
+        # 前面的检查只能验证 UI 层面的登录，不能保证后端 API 认证成功
+        # 阿里云 WAF 可能导致前端正常但后端 API 被拦截
+
+        # 等待一段时间，让 session cookies 设置
+        await page.wait_for_timeout(TimeoutConfig.SHORT_WAIT_3)
+
+        # 获取当前所有 cookies
+        all_cookies = await context.cookies()
+        cookies_dict = {cookie["name"]: cookie["value"] for cookie in all_cookies}
+
+        logger.info(f"🍪 [{self.auth_config.username}] 当前 cookies 数量: {len(cookies_dict)}")
+        logger.info(f"🍪 [{self.auth_config.username}] Cookie 列表: {list(cookies_dict.keys())}")
+
+        # 检查是否只有 WAF cookies（没有真实 session cookies）
+        waf_only_cookies = ['acw_tc', 'cdn_sec_tc', 'acw_sc__v2', '__cf_bm', 'cf_clearance']
+        session_cookie_names = ['session', 'sessionid', 'connect.sid', 'JSESSIONID', 'PHPSESSID']
+
+        has_waf_cookies = any(name in cookies_dict for name in waf_only_cookies)
+        has_session_cookies = any(name in cookies_dict for name in session_cookie_names)
+
+        if has_waf_cookies:
+            waf_cookie_list = [name for name in waf_only_cookies if name in cookies_dict]
+            logger.info(f"🛡️ [{self.auth_config.username}] 检测到 WAF cookies: {waf_cookie_list}")
+
+        if not has_session_cookies:
+            logger.warning(f"⚠️ [{self.auth_config.username}] 未检测到标准 session cookies")
+
+            # 检查是否只有 WAF cookies（这是 WAF 拦截的典型特征）
+            non_waf_cookies = [name for name in cookies_dict.keys() if name not in waf_only_cookies]
+            if len(non_waf_cookies) == 0:
+                logger.error(f"❌ [{self.auth_config.username}] 只有 WAF cookies，疑似被阿里云 WAF 拦截")
+                return False, "Login blocked by WAF - only WAF cookies obtained, no session cookies"
+            elif len(non_waf_cookies) < 3:
+                logger.warning(f"⚠️ [{self.auth_config.username}] 非 WAF cookies 很少 ({non_waf_cookies})，可能被 WAF 部分拦截")
+        else:
+            session_cookie_list = [name for name in session_cookie_names if name in cookies_dict]
+            logger.info(f"✅ [{self.auth_config.username}] 找到 session cookies: {session_cookie_list}")
+
+        # 方法5: 验证 localStorage 是否有用户数据（阿里云 WAF 拦截时 localStorage 会是空的）
+        try:
+            await page.wait_for_timeout(TimeoutConfig.SHORT_WAIT_2)
+            user_data = await page.evaluate("() => localStorage.getItem('user')")
+            if user_data:
+                logger.info(f"✅ [{self.auth_config.username}] localStorage 包含用户数据")
+            else:
+                logger.warning(f"⚠️ [{self.auth_config.username}] localStorage 未包含用户数据（疑似 WAF 拦截）")
+
+                # 如果同时没有 session cookies 和 localStorage 用户数据，很可能是 WAF 拦截
+                if not has_session_cookies:
+                    logger.error(f"❌ [{self.auth_config.username}] 登录失败：无 session cookies 且 localStorage 为空")
+                    return False, "Login blocked by WAF - no session cookies and empty localStorage"
+        except Exception as e:
+            logger.warning(f"⚠️ [{self.auth_config.username}] localStorage 检查失败: {e}")
+
+        # 综合判断
+        if login_in_url:
             return False, "Login failed - still on login page (may need captcha)"
+
+        # 如果 UI 指标正常（URL变化或用户元素）且有真实 cookies，则认为成功
+        if (not login_in_url or user_elements_found or page_title_indicates_success):
+            if has_session_cookies or len(cookies_dict) > 5:  # 有 session cookies 或 cookies 数量足够多
+                logger.info(f"✅ [{self.auth_config.username}] 登录验证通过")
+                return True, None
+            else:
+                logger.warning(f"⚠️ [{self.auth_config.username}] UI 正常但 cookies 不足，可能被 WAF 拦截")
+                return False, "Login may be blocked by WAF - insufficient cookies"
 
         return True, None
 
@@ -229,13 +295,30 @@ class EmailAuthenticator(Authenticator):
             logger.info(f"🔑 [{self.auth_config.username}] 点击登录按钮...")
             await login_button.click()
 
-            try:
-                await page.wait_for_load_state("networkidle", timeout=TimeoutConfig.MEDIUM_WAIT_10)
-                await page.wait_for_timeout(TimeoutConfig.SHORT_WAIT_2)
-            except Exception:
-                logger.warning(f"⚠️ [{self.auth_config.username}] 页面加载超时，继续检查登录状态...")
+            # ==================== 增强 WAF 绕过（2025版）====================
+            # 登录提交后，给予更长的等待时间让服务器设置 session cookies
+            # 阿里云 WAF 需要额外时间处理请求
 
-            success, error_msg = await self._check_login_success(page)
+            logger.info(f"⏳ [{self.auth_config.username}] 等待登录响应和 session cookies 设置...")
+            try:
+                # 方案1: 等待 networkidle（最多10秒）
+                await page.wait_for_load_state("networkidle", timeout=TimeoutConfig.MEDIUM_WAIT_10)
+                logger.info(f"✅ [{self.auth_config.username}] 页面网络已空闲")
+            except Exception:
+                logger.warning(f"⚠️ [{self.auth_config.username}] networkidle 超时，继续...")
+
+            # 方案2: 额外等待3-5秒，让 WAF 和服务器设置 cookies
+            await page.wait_for_timeout(TimeoutConfig.SHORT_WAIT_3)
+
+            # 方案3: 尝试简单的页面交互，触发可能的 JavaScript 执行
+            try:
+                logger.info(f"🔄 [{self.auth_config.username}] 尝试页面交互以触发 cookies 设置...")
+                await page.mouse.move(100, 100)  # 简单的鼠标移动
+                await page.wait_for_timeout(TimeoutConfig.SHORT_WAIT_2)
+            except:
+                pass
+
+            success, error_msg = await self._check_login_success(page, context)
             if not success:
                 return {"success": False, "error": error_msg}
 
