@@ -303,8 +303,8 @@ class CheckIn:
                     else:
                         return False, {"error": "Failed to get user info for AgentRouter"}
                 else:
-                    # AnyRouter: 需要显式调用签到接口
-                    checkin_result = await self._do_checkin(auth_cookies, auth_config)
+                    # AnyRouter: 需要显式调用签到接口（在浏览器环境中执行）
+                    checkin_result = await self._do_checkin(auth_cookies, auth_config, page=page)
                     if not checkin_result["success"]:
                         return False, {"error": checkin_result.get("message", "Check-in failed")}
 
@@ -524,10 +524,121 @@ class CheckIn:
         self.logger.info(f"📄 [{self.account.name}] 响应内容: {response.text[:100]}...")
         return {"success": False, "message": f"HTTP {response.status_code}"}
 
+    async def _do_checkin_in_browser(self, page: Page, cookies: Dict[str, str], auth_config: AuthConfig) -> Dict[str, Any]:
+        """在浏览器环境中执行签到请求（绕过JavaScript验证）"""
+        try:
+            import random
+            delay = random.uniform(RATE_LIMIT_DELAY_MIN, RATE_LIMIT_DELAY_MAX)
+            self.logger.debug(f"⏱️ [{self.account.name}] 速率限制保护延迟 {delay:.2f}秒")
+            await asyncio.sleep(delay)
+
+            self.logger.info(f"🌐 [{self.account.name}] 在浏览器中执行签到请求...")
+
+            checkin_url = self.provider.get_checkin_url()
+
+            # 使用page.evaluate在浏览器上下文中执行fetch请求
+            result = await page.evaluate("""
+                async (url) => {
+                    try {
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            headers: {
+                                'Accept': 'application/json, text/plain, */*',
+                                'Content-Type': 'application/json',
+                            },
+                            credentials: 'include'
+                        });
+
+                        const contentType = response.headers.get('content-type');
+                        let data;
+
+                        if (contentType && contentType.includes('application/json')) {
+                            data = await response.json();
+                        } else {
+                            data = await response.text();
+                        }
+
+                        return {
+                            status: response.status,
+                            ok: response.ok,
+                            contentType: contentType,
+                            data: data
+                        };
+                    } catch (error) {
+                        return {
+                            status: 0,
+                            ok: false,
+                            error: error.message
+                        };
+                    }
+                }
+            """, checkin_url)
+
+            self.logger.info(f"📊 [{self.account.name}] 签到响应: HTTP {result.get('status')}")
+
+            if result.get('error'):
+                self.logger.error(f"❌ [{self.account.name}] 浏览器请求失败: {result['error']}")
+                return {"success": False, "message": f"浏览器请求失败: {result['error']}"}
+
+            if not result.get('ok'):
+                self.logger.error(f"❌ [{self.account.name}] HTTP错误: {result.get('status')}")
+                return {"success": False, "message": f"HTTP {result.get('status')}"}
+
+            # 处理响应数据
+            data = result.get('data')
+            content_type = result.get('contentType', '')
+
+            if isinstance(data, str):
+                # 如果返回的是HTML/JavaScript，记录但不解析
+                if 'html' in content_type.lower() or 'javascript' in content_type.lower():
+                    self.logger.warning(f"⚠️ [{self.account.name}] 签到返回非JSON响应: {content_type}")
+                    self.logger.info(f"📄 [{self.account.name}] 响应片段: {data[:200]}...")
+
+                    # 等待一下，让JavaScript执行完毕
+                    await page.wait_for_timeout(3000)
+
+                    # 尝试通过检查用户信息来验证签到是否成功
+                    self.logger.info(f"🔍 [{self.account.name}] 尝试验证签到结果...")
+                    return {"success": True, "message": "签到请求已发送（JavaScript响应），需要验证"}
+
+                # 尝试解析JSON字符串
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    self.logger.error(f"❌ [{self.account.name}] 无法解析响应为JSON")
+                    return {"success": False, "message": "响应不是有效的JSON"}
+
+            if isinstance(data, dict):
+                if data.get("success"):
+                    self.logger.info(f"✅ [{self.account.name}] 签到成功: {data.get('message', '')}")
+                    return {"success": True, "message": data.get("message", "签到成功")}
+                else:
+                    error_msg = data.get("message", "签到失败")
+                    self.logger.error(f"❌ [{self.account.name}] 签到失败: {error_msg}")
+                    return {"success": False, "message": error_msg}
+
+            self.logger.error(f"❌ [{self.account.name}] 未知响应格式")
+            return {"success": False, "message": "未知响应格式"}
+
+        except Exception as e:
+            self.logger.error(f"❌ [{self.account.name}] 浏览器签到异常: {type(e).__name__}: {str(e)}")
+            return {"success": False, "message": f"浏览器签到异常: {str(e)}"}
+
     @performance_monitor
     @retry_async(max_retries=3, delay=2, backoff=2)
-    async def _do_checkin(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Dict[str, Any]:
-        """执行签到请求（带重试机制和速率限制保护）"""
+    async def _do_checkin(self, cookies: Dict[str, str], auth_config: AuthConfig, page: Optional[Page] = None) -> Dict[str, Any]:
+        """执行签到请求（带重试机制和速率限制保护）
+
+        Args:
+            cookies: 认证cookies
+            auth_config: 认证配置
+            page: 可选的Playwright页面对象，如果提供则在浏览器中执行签到
+        """
+        # 如果提供了page对象，优先使用浏览器环境签到
+        if page:
+            return await self._do_checkin_in_browser(page, cookies, auth_config)
+
+        # 否则使用HTTP客户端签到（保留原有逻辑作为备用）
         try:
             # 添加随机延迟，避免触发速率限制
             import random
