@@ -286,7 +286,7 @@ class CheckIn:
                 if self.provider.name.lower() == "agentrouter":
                     # AgentRouter: 查询用户信息即可完成签到
                     self.logger.info(f"ℹ️ [{self.account.name}] AgentRouter 通过查询用户信息自动签到")
-                    user_info = await self._get_user_info(auth_cookies, auth_config)
+                    user_info = await self._get_user_info(auth_cookies, auth_config, page=page)
                     if user_info and user_info.get("success"):
                         # 计算余额变化
                         balance_change = self._calculate_balance_change(
@@ -310,8 +310,8 @@ class CheckIn:
 
                     self.logger.info(f"✅ [{self.account.name}] 签到成功: {checkin_result.get('message', '')}")
 
-                    # 步骤 4: 获取用户信息和余额
-                    user_info = await self._get_user_info(auth_cookies, auth_config)
+                    # 步骤 4: 获取用户信息和余额（在浏览器环境中执行）
+                    user_info = await self._get_user_info(auth_cookies, auth_config, page=page)
                     if user_info and user_info.get("success"):
                         # 计算余额变化
                         balance_change = self._calculate_balance_change(
@@ -757,10 +757,107 @@ class CheckIn:
 
         return None
 
+    async def _get_user_info_in_browser(self, page: Page, cookies: Dict[str, str], auth_config: AuthConfig) -> Optional[Dict[str, Any]]:
+        """在浏览器环境中获取用户信息（绕过JavaScript验证）"""
+        try:
+            self.logger.info(f"🌐 [{self.account.name}] 在浏览器中获取用户信息...")
+
+            user_info_url = self.provider.get_user_info_url()
+
+            # 使用page.evaluate在浏览器上下文中执行fetch请求
+            result = await page.evaluate("""
+                async (url) => {
+                    try {
+                        const response = await fetch(url, {
+                            method: 'GET',
+                            headers: {
+                                'Accept': 'application/json, text/plain, */*',
+                                'X-Requested-With': 'XMLHttpRequest',
+                            },
+                            credentials: 'include'
+                        });
+
+                        const contentType = response.headers.get('content-type');
+                        let data;
+
+                        if (contentType && contentType.includes('application/json')) {
+                            data = await response.json();
+                        } else {
+                            data = await response.text();
+                        }
+
+                        return {
+                            status: response.status,
+                            ok: response.ok,
+                            contentType: contentType,
+                            data: data
+                        };
+                    } catch (error) {
+                        return {
+                            status: 0,
+                            ok: false,
+                            error: error.message
+                        };
+                    }
+                }
+            """, user_info_url)
+
+            self.logger.info(f"📊 [{self.account.name}] 用户信息响应: HTTP {result.get('status')}")
+
+            if result.get('error'):
+                self.logger.error(f"❌ [{self.account.name}] 浏览器请求失败: {result['error']}")
+                return None
+
+            if not result.get('ok'):
+                self.logger.error(f"❌ [{self.account.name}] HTTP错误: {result.get('status')}")
+                return None
+
+            # 处理响应数据
+            data = result.get('data')
+            content_type = result.get('contentType', '')
+
+            if isinstance(data, str):
+                # 如果返回的是HTML/JavaScript，记录但不解析
+                if 'html' in content_type.lower() or 'javascript' in content_type.lower():
+                    self.logger.warning(f"⚠️ [{self.account.name}] 用户信息返回非JSON响应: {content_type}")
+                    self.logger.info(f"📄 [{self.account.name}] 响应片段: {data[:200]}...")
+
+                    # 等待JavaScript执行
+                    await page.wait_for_timeout(3000)
+                    return None
+
+                # 尝试解析JSON字符串
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    self.logger.error(f"❌ [{self.account.name}] 无法解析响应为JSON")
+                    return None
+
+            if isinstance(data, dict):
+                return self._parse_user_info_response(data)
+
+            self.logger.error(f"❌ [{self.account.name}] 未知响应格式")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"❌ [{self.account.name}] 浏览器获取用户信息异常: {type(e).__name__}: {str(e)}")
+            return None
+
     @performance_monitor
     @retry_async(max_retries=3, delay=2, backoff=2)
-    async def _get_user_info(self, cookies: Dict[str, str], auth_config: AuthConfig) -> Optional[Dict[str, Any]]:
-        """获取用户信息和余额（带重试机制）"""
+    async def _get_user_info(self, cookies: Dict[str, str], auth_config: AuthConfig, page: Optional[Page] = None) -> Optional[Dict[str, Any]]:
+        """获取用户信息和余额（带重试机制）
+
+        Args:
+            cookies: 认证cookies
+            auth_config: 认证配置
+            page: 可选的Playwright页面对象，如果提供则在浏览器中执行
+        """
+        # 如果提供了page对象，优先使用浏览器环境
+        if page:
+            return await self._get_user_info_in_browser(page, cookies, auth_config)
+
+        # 否则使用HTTP客户端（保留原有逻辑作为备用）
         try:
             self.logger.info(f"📡 [{self.account.name}] 开始用户信息查询...")
 
