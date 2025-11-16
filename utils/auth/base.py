@@ -334,10 +334,24 @@ class Authenticator(ABC):
         try:
             import httpx
             headers = {"User-Agent": DEFAULT_USER_AGENT, "Accept": "application/json"}
+
+            # 诊断：打印请求详情
+            logger.info(f"🔍 [诊断] 用户信息API请求详情:")
+            logger.info(f"   URL: {self.provider_config.get_user_info_url()}")
+            logger.info(f"   Cookies数量: {len(cookies)}")
+            logger.info(f"   Cookie键: {list(cookies.keys())}")
+
             async with httpx.AsyncClient(cookies=cookies, timeout=10.0, verify=True) as client:
                 response = await client.get(self.provider_config.get_user_info_url(), headers=headers)
+
+                # 诊断：打印响应详情
+                logger.info(f"📊 [诊断] API响应状态: {response.status_code}")
+                logger.info(f"📊 [诊断] 响应头: {dict(response.headers)}")
+
                 if response.status_code == 200:
                     data = response.json()
+                    logger.info(f"📋 [诊断] API响应JSON: {data}")
+
                     if data.get("success") and data.get("data"):
                         user_data = data["data"]
                         user_id = user_data.get("id") or user_data.get("user_id") or user_data.get("userId")
@@ -346,11 +360,23 @@ class Authenticator(ABC):
                             logger.info(f"✅ 提取到用户标识: ID={user_id}, 用户名={username}")
                             return str(user_id) if user_id else None, username
                 else:
-                    logger.warning(f"⚠️ 用户信息API返回 {response.status_code}，尝试从页面提取")
+                    # 诊断：详细记录非200响应
+                    logger.warning(f"⚠️ 用户信息API返回 {response.status_code}")
+                    logger.warning(f"⚠️ [诊断] 响应体: {response.text[:500]}")
+
+                    # 对于401错误，额外记录可能的原因
+                    if response.status_code == 401:
+                        logger.error(f"❌ [诊断] 认证失败(401)可能原因:")
+                        logger.error(f"   1. Cookies已过期或无效")
+                        logger.error(f"   2. 缺少必要的认证Cookie")
+                        logger.error(f"   3. 需要额外的请求头（如New-Api-User）")
+                        logger.error(f"   当前cookies: {', '.join(cookies.keys())}")
+
                     # 当API返回401时，尝试从当前页面URL提取user_id
                     return await self._extract_user_from_page(page)
         except Exception as e:
-            logger.warning(f"⚠️ 提取用户信息失败: {e}，尝试从页面提取")
+            logger.warning(f"⚠️ 提取用户信息失败: {e}")
+            logger.warning(f"⚠️ [诊断] 异常详情: {type(e).__name__}: {str(e)}")
             return await self._extract_user_from_page(page)
         return None, None
 
@@ -393,10 +419,26 @@ class Authenticator(ABC):
             # 等待5秒，确保localStorage已更新
             await page.wait_for_timeout(TimeoutConfig.MEDIUM_WAIT)
 
+            # 诊断：获取完整的 localStorage 数据
+            logger.info(f"🔍 [诊断] 获取完整localStorage内容...")
+            all_storage = await page.evaluate("""() => {
+                const storage = {};
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    storage[key] = localStorage.getItem(key);
+                }
+                return storage;
+            }""")
+            logger.info(f"📋 [诊断] localStorage完整内容: {all_storage}")
+
             user_data = await page.evaluate("() => localStorage.getItem('user')")
+            logger.info(f"📋 [诊断] localStorage['user'] 原始值: {repr(user_data)}")
+
             if user_data:
                 import json
                 user_obj = json.loads(user_data)
+                logger.info(f"📋 [诊断] 解析后的用户对象: {user_obj}")
+
                 user_id = user_obj.get("id")
                 username = user_obj.get("username") or user_obj.get("name") or user_obj.get("email")
 
@@ -405,10 +447,13 @@ class Authenticator(ABC):
                     return str(user_id), username
                 else:
                     logger.warning(f"⚠️ localStorage中未找到用户ID")
+                    logger.warning(f"⚠️ [诊断] 用户对象的所有键: {list(user_obj.keys())}")
             else:
                 logger.warning(f"⚠️ localStorage中未找到用户数据")
+                logger.warning(f"⚠️ [诊断] localStorage中的所有键: {list(all_storage.keys()) if all_storage else '空'}")
         except Exception as e:
             logger.warning(f"⚠️ 从localStorage提取用户信息异常: {e}")
+            logger.warning(f"⚠️ [诊断] 异常详情: {type(e).__name__}: {str(e)}")
 
         return None, None
 

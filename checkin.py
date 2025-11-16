@@ -680,14 +680,28 @@ class CheckIn:
     async def _handle_401_response(self, client: httpx.AsyncClient) -> Dict[str, Any]:
         """处理401认证失败响应"""
         self.logger.error(f"❌ [{self.account.name}] 签到认证失败 (401)")
-        self.logger.info(f"🔍 [{self.account.name}] 检查cookies有效性...")
 
+        # 诊断：获取并记录401响应的详细信息
         try:
+            # 获取当前请求的cookies和headers（从client）
+            self.logger.error(f"🔍 [诊断] 401错误详细信息:")
+            self.logger.error(f"   请求URL: {self.provider.get_checkin_url()}")
+
+            # 尝试从client获取cookies（注意：httpx.AsyncClient不直接暴露cookies，但我们可以重新记录）
+            # 由于client已经创建，我们在调用方记录cookies
+
+            self.logger.info(f"🔍 [{self.account.name}] 检查cookies有效性...")
             page_response = await client.get(self.provider.base_url)
+
+            # 诊断：记录主页响应
+            self.logger.info(f"📊 [诊断] 主页响应状态: {page_response.status_code}")
+            self.logger.info(f"📊 [诊断] 主页响应内容片段: {page_response.text[:200]}")
+
             if "login" in page_response.text.lower():
                 self.logger.info(f"🔄 [{self.account.name}] 检测到需要重新登录")
             return {"success": False, "message": "认证已过期，需要重新登录"}
-        except:
+        except Exception as e:
+            self.logger.error(f"⚠️ [诊断] 检查cookies异常: {e}")
             return {"success": False, "message": "认证已过期，需要重新登录"}
 
     def _handle_403_response(self) -> Dict[str, Any]:
@@ -914,6 +928,13 @@ class CheckIn:
 
             self.logger.info(f"🎯 [{self.account.name}] 请求URL: {self.provider.get_checkin_url()}")
 
+            # 诊断：在签到前记录完整请求信息
+            self.logger.info(f"🔍 [诊断] 签到请求详情:")
+            self.logger.info(f"   URL: {self.provider.get_checkin_url()}")
+            self.logger.info(f"   Headers: {headers}")
+            self.logger.info(f"   Cookies数量: {len(cookies)}")
+            self.logger.info(f"   Cookie键: {list(cookies.keys())[:10]}")  # 只显示前10个
+
             # 创建HTTP客户端并发送请求
             async with httpx.AsyncClient(
                 cookies=cookies,
@@ -925,6 +946,12 @@ class CheckIn:
             ) as client:
                 self.logger.info(f"📤 [{self.account.name}] 发送POST请求...")
                 response = await client.post(self.provider.get_checkin_url())
+
+                # 诊断：记录响应详情
+                self.logger.info(f"📊 [诊断] 签到响应详情:")
+                self.logger.info(f"   状态码: {response.status_code}")
+                self.logger.info(f"   响应头: {dict(response.headers)}")
+                self.logger.info(f"   响应体前500字符: {response.text[:500]}")
 
                 # 处理响应
                 return await self._handle_checkin_response(response, client, headers)
