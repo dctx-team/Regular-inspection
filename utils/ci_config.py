@@ -66,7 +66,7 @@ class CIConfig:
     @staticmethod
     def get_retry_count() -> int:
         """获取 CI 环境的重试次数
-        
+
         可通过环境变量 CI_RETRY_COUNT 配置
         默认为 3
         """
@@ -74,4 +74,44 @@ class CIConfig:
             return int(os.getenv("CI_RETRY_COUNT", "3"))
         except ValueError:
             return 3
+
+    @staticmethod
+    def should_enable_behavior_simulation() -> bool:
+        """判断是否在 CI 环境中启用人类行为模拟
+
+        人类行为模拟包括：
+        - 鼠标移动
+        - 页面滚动
+        - 逐字符打字
+        - 自然的点击行为
+
+        可通过环境变量 CI_ENABLE_BEHAVIOR_SIMULATION 配置
+        默认在 CI 环境下启用（true）
+
+        Returns:
+            bool: 是否启用行为模拟
+        """
+        if not CIConfig.is_ci_environment():
+            return False
+
+        # 默认在 CI 环境下启用行为模拟
+        return os.getenv("CI_ENABLE_BEHAVIOR_SIMULATION", "true").lower() == "true"
+
+    @staticmethod
+    def get_behavior_simulation_intensity() -> str:
+        """获取行为模拟的强度级别
+
+        可通过环境变量 CI_BEHAVIOR_INTENSITY 配置
+        可选值：
+        - "light": 轻度模拟（仅基本行为）
+        - "medium": 中度模拟（默认）
+        - "heavy": 重度模拟（更多行为，更长延迟）
+
+        Returns:
+            str: 强度级别
+        """
+        intensity = os.getenv("CI_BEHAVIOR_INTENSITY", "medium").lower()
+        if intensity not in ["light", "medium", "heavy"]:
+            return "medium"
+        return intensity
 

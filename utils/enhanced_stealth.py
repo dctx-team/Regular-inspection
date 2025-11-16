@@ -396,12 +396,318 @@ class EnhancedStealth:
                 });
             }
 
-            // ==================== 调试信息 ====================
-            console.log('✅ 增强型反检测脚本已注入（2025增强版）');
+            // ==================== 2025最新增强特征（7个高级反检测） ====================
+
+            // 21. Performance API 伪装（添加真实的性能数据）
+            if (window.performance && window.performance.timing) {
+                const timing = window.performance.timing;
+                const now = Date.now();
+                const navigationStart = now - Math.floor(seededRandom(sessionSeed + 100) * 3000 + 1000);
+
+                // 伪造合理的性能时间线
+                Object.defineProperty(timing, 'navigationStart', {
+                    get: () => navigationStart,
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'fetchStart', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 101) * 50 + 10),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'domainLookupStart', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 102) * 80 + 50),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'domainLookupEnd', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 103) * 120 + 80),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'connectStart', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 104) * 150 + 120),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'connectEnd', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 105) * 200 + 180),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'requestStart', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 106) * 250 + 200),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'responseStart', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 107) * 400 + 300),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'responseEnd', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 108) * 600 + 500),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'domLoading', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 109) * 650 + 550),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'domInteractive', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 110) * 1000 + 800),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'domContentLoadedEventStart', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 111) * 1200 + 1000),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'domContentLoadedEventEnd', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 112) * 1300 + 1100),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'domComplete', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 113) * 2000 + 1500),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'loadEventStart', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 114) * 2100 + 1800),
+                    configurable: true
+                });
+                Object.defineProperty(timing, 'loadEventEnd', {
+                    get: () => navigationStart + Math.floor(seededRandom(sessionSeed + 115) * 2200 + 2000),
+                    configurable: true
+                });
+            }
+
+            // 22. Event Trust 修复（修复 isTrusted 属性）
+            const originalAddEventListener = EventTarget.prototype.addEventListener;
+            EventTarget.prototype.addEventListener = function(type, listener, options) {
+                const wrappedListener = function(event) {
+                    // 强制设置 isTrusted 为 true
+                    if (event && !event.isTrusted) {
+                        Object.defineProperty(event, 'isTrusted', {
+                            get: () => true,
+                            configurable: true
+                        });
+                    }
+
+                    if (typeof listener === 'function') {
+                        return listener.call(this, event);
+                    } else if (listener && typeof listener.handleEvent === 'function') {
+                        return listener.handleEvent(event);
+                    }
+                };
+
+                return originalAddEventListener.call(this, type, wrappedListener, options);
+            };
+
+            // 修复 dispatchEvent 以确保事件看起来是可信的
+            const originalDispatchEvent = EventTarget.prototype.dispatchEvent;
+            EventTarget.prototype.dispatchEvent = function(event) {
+                Object.defineProperty(event, 'isTrusted', {
+                    get: () => true,
+                    configurable: true
+                });
+                return originalDispatchEvent.call(this, event);
+            };
+
+            // 23. Canvas 指纹一致性增强（确保多次调用返回相同结果）
+            // 创建会话级别的Canvas指纹缓存
+            const canvasCache = new Map();
+
+            const originalToDataURLEnhanced = HTMLCanvasElement.prototype.toDataURL;
+            HTMLCanvasElement.prototype.toDataURL = function(type) {
+                // 生成canvas的唯一标识
+                const canvasId = this.width + 'x' + this.height + '_' + (this.id || 'anonymous');
+
+                // 如果缓存中存在，直接返回
+                if (canvasCache.has(canvasId)) {
+                    return canvasCache.get(canvasId);
+                }
+
+                // 否则生成并缓存
+                const result = originalToDataURLEnhanced.apply(this, arguments);
+                canvasCache.set(canvasId, result);
+                return result;
+            };
+
+            // 24. WebGL 参数伪装增强（伪装更多 WebGL 渲染器信息）
+            const getParameterEnhanced = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                // UNMASKED_VENDOR_WEBGL
+                if (parameter === 37445) {
+                    return 'Intel Inc.';
+                }
+                // UNMASKED_RENDERER_WEBGL
+                if (parameter === 37446) {
+                    return 'Intel Iris OpenGL Engine';
+                }
+                // VERSION
+                if (parameter === 0x1F02) {
+                    return 'WebGL 1.0 (OpenGL ES 2.0 Chromium)';
+                }
+                // SHADING_LANGUAGE_VERSION
+                if (parameter === 0x8B8C) {
+                    return 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)';
+                }
+                // VENDOR
+                if (parameter === 0x1F00) {
+                    return 'WebKit';
+                }
+                // RENDERER
+                if (parameter === 0x1F01) {
+                    return 'WebKit WebGL';
+                }
+                // MAX_TEXTURE_SIZE
+                if (parameter === 0x0D33) {
+                    return 16384;
+                }
+                // MAX_VERTEX_TEXTURE_IMAGE_UNITS
+                if (parameter === 0x8B4C) {
+                    return 16;
+                }
+                return getParameterEnhanced.apply(this, arguments);
+            };
+
+            // WebGL2 支持增强
+            if (window.WebGL2RenderingContext) {
+                const getParameter2Enhanced = WebGL2RenderingContext.prototype.getParameter;
+                WebGL2RenderingContext.prototype.getParameter = function(parameter) {
+                    if (parameter === 37445) return 'Intel Inc.';
+                    if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+                    if (parameter === 0x1F02) return 'WebGL 2.0 (OpenGL ES 3.0 Chromium)';
+                    if (parameter === 0x8B8C) return 'WebGL GLSL ES 3.0 (OpenGL ES GLSL ES 3.0 Chromium)';
+                    if (parameter === 0x1F00) return 'WebKit';
+                    if (parameter === 0x1F01) return 'WebKit WebGL';
+                    if (parameter === 0x0D33) return 16384;
+                    if (parameter === 0x8B4C) return 16;
+                    return getParameter2Enhanced.apply(this, arguments);
+                };
+            }
+
+            // 25. Plugin 数组优化（添加更真实的插件列表）
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => {
+                    const plugins = [
+                        {
+                            0: {type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format", enabledPlugin: true},
+                            name: "Chrome PDF Plugin",
+                            filename: "internal-pdf-viewer",
+                            description: "Portable Document Format",
+                            length: 1
+                        },
+                        {
+                            0: {type: "application/pdf", suffixes: "pdf", description: "Portable Document Format", enabledPlugin: true},
+                            name: "Chromium PDF Plugin",
+                            filename: "internal-pdf-viewer",
+                            description: "Portable Document Format",
+                            length: 1
+                        },
+                        {
+                            0: {type: "application/x-nacl", suffixes: "", description: "Native Client Executable", enabledPlugin: true},
+                            1: {type: "application/x-pnacl", suffixes: "", description: "Portable Native Client Executable", enabledPlugin: true},
+                            name: "Native Client",
+                            filename: "internal-nacl-plugin",
+                            description: "Native Client Executable",
+                            length: 2
+                        },
+                        {
+                            0: {type: "application/x-ppapi-widevine-cdm", suffixes: "", description: "Widevine Content Decryption Module", enabledPlugin: true},
+                            name: "Widevine Content Decryption Module",
+                            filename: "widevinecdmadapter.dll",
+                            description: "Enables Widevine licenses for playback of HTML audio/video content.",
+                            length: 1
+                        }
+                    ];
+
+                    // 添加数组特性（使其看起来像真实的PluginArray）
+                    plugins.item = function(index) {
+                        return this[index] || null;
+                    };
+                    plugins.namedItem = function(name) {
+                        return this.find(p => p.name === name) || null;
+                    };
+                    plugins.refresh = function() {};
+
+                    return plugins;
+                },
+                configurable: true
+            });
+
+            // mimeTypes 也需要同步更新
+            Object.defineProperty(navigator, 'mimeTypes', {
+                get: () => {
+                    const mimeTypes = [
+                        {type: "application/pdf", suffixes: "pdf", description: "Portable Document Format", enabledPlugin: {name: "Chrome PDF Plugin"}},
+                        {type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format", enabledPlugin: {name: "Chrome PDF Plugin"}},
+                        {type: "application/x-nacl", suffixes: "", description: "Native Client Executable", enabledPlugin: {name: "Native Client"}},
+                        {type: "application/x-pnacl", suffixes: "", description: "Portable Native Client Executable", enabledPlugin: {name: "Native Client"}},
+                        {type: "application/x-ppapi-widevine-cdm", suffixes: "", description: "Widevine Content Decryption Module", enabledPlugin: {name: "Widevine Content Decryption Module"}}
+                    ];
+
+                    mimeTypes.item = function(index) {
+                        return this[index] || null;
+                    };
+                    mimeTypes.namedItem = function(name) {
+                        return this.find(m => m.type === name) || null;
+                    };
+
+                    return mimeTypes;
+                },
+                configurable: true
+            });
+
+            // 26. Permissions API 伪装增强（伪装更多权限查询结果）
+            const originalPermissionsQuery = window.navigator.permissions?.query;
+            if (originalPermissionsQuery) {
+                window.navigator.permissions.query = function(parameters) {
+                    const permissionName = parameters.name;
+
+                    // 为不同的权限返回合理的状态
+                    const permissionStates = {
+                        'notifications': 'default',
+                        'geolocation': 'prompt',
+                        'camera': 'prompt',
+                        'microphone': 'prompt',
+                        'midi': 'prompt',
+                        'clipboard-read': 'prompt',
+                        'clipboard-write': 'prompt',
+                        'payment-handler': 'prompt',
+                        'persistent-storage': 'prompt',
+                        'push': 'prompt',
+                        'screen-wake-lock': 'prompt',
+                        'xr-spatial-tracking': 'prompt'
+                    };
+
+                    const state = permissionStates[permissionName] || 'prompt';
+
+                    return Promise.resolve({
+                        state: state,
+                        status: state,
+                        onchange: null
+                    });
+                };
+            }
+
+            // 27. Battery API 禁用（移除 CI 环境特征）
+            // 真实浏览器可能没有 Battery API，或者返回受限信息
+            // 完全移除 getBattery 方法（而不是返回假数据）
+            if (navigator.getBattery) {
+                Object.defineProperty(navigator, 'getBattery', {
+                    get: () => undefined,
+                    configurable: true
+                });
+                delete navigator.getBattery;
+            }
+
+            // 同时删除其他可能的电池API变体
+            delete navigator.battery;
+            delete navigator.mozBattery;
+            delete navigator.webkitBattery;
+
+            // ==================== 调试信息（更新版） ====================
+            console.log('✅ 增强型反检测脚本已注入（2025最新版）');
             console.log('   - CDP痕迹清理: ✓ 40+ 对象');
-            console.log('   - Canvas指纹: ✓ 确定性噪声');
+            console.log('   - Canvas指纹: ✓ 确定性噪声 + 缓存一致性');
             console.log('   - Audio指纹: ✓ 确定性噪声');
-            console.log('   - WebGL指纹: ✓ 一致性伪装');
+            console.log('   - WebGL指纹: ✓ 增强参数伪装');
+            console.log('   - Performance API: ✓ 真实时间线');
+            console.log('   - Event Trust: ✓ isTrusted修复');
+            console.log('   - Plugin Array: ✓ 完整列表');
+            console.log('   - Permissions API: ✓ 多权限伪装');
+            console.log('   - Battery API: ✓ 已移除');
             console.log('   - 会话种子: ' + sessionSeed.toFixed(2));
         """)
 
