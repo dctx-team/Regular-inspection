@@ -227,7 +227,7 @@ class GitHubAuthenticator(Authenticator):
                             await page.goto(
                                 self.provider_config.get_login_url(),
                                 wait_until="domcontentloaded",
-                                timeout=30000
+                                timeout=60000
                             )
                             await page.wait_for_timeout(10000)  # 增加到10秒
                         except Exception as e:
@@ -261,8 +261,8 @@ class GitHubAuthenticator(Authenticator):
             # 第三步：构造 GitHub OAuth URL 并直接访问
             oauth_url = f"https://github.com/login/oauth/authorize?response_type=code&client_id={client_id}&state={auth_state}&scope=user:email"
             logger.info(f"🔗 [{self.auth_config.username}] 访问 GitHub OAuth URL...")
-            
-            await page.goto(oauth_url, wait_until="domcontentloaded", timeout=30000)
+
+            await page.goto(oauth_url, wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(2000)
 
             # 第四步：检查是否需要登录 GitHub
