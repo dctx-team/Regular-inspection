@@ -68,9 +68,9 @@ jobs:
 
           echo "=== 📡 开始配置 Clash 代理 ==="
 
-          # 下载 Clash Premium
-          echo "📥 下载 Clash Premium..."
-          wget -q -O clash.gz https://github.com/Dreamacro/clash/releases/download/premium/clash-linux-amd64-2023.08.17.gz
+          # 下载 Clash.Meta (mihomo)
+          echo "📥 下载 Clash.Meta..."
+          wget -q -O clash.gz "https://github.com/MetaCubeX/mihomo/releases/download/v1.18.10/mihomo-linux-amd64-v1.18.10.gz"
           gunzip clash.gz
           chmod +x clash
 
