@@ -57,7 +57,7 @@ jobs:
           playwright install-deps chromium
 
       - name: 设置 Clash 代理（可选）
-        if: ${{ secrets.PROXY_SUBSCRIPTION_URL != '' }}
+        if: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
         env:
           SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
         run: |
@@ -141,7 +141,7 @@ jobs:
           SERVERPUSHKEY: ${{ secrets.SERVERPUSHKEY }}
 
           # 代理配置（使用本地 Clash 提供的 HTTP 代理）
-          USE_PROXY: ${{ secrets.PROXY_SUBSCRIPTION_URL != '' && 'true' || 'false' }}
+          USE_PROXY: ${{ secrets.PROXY_SUBSCRIPTION_URL && 'true' || 'false' }}
           PROXY_SERVER: http://127.0.0.1:7890
 
           # 代理细粒度控制（可选）
