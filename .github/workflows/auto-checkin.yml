@@ -58,18 +58,20 @@ jobs:
 
       - name: 设置 Clash 代理（可选）
         if: ${{ secrets.PROXY_SUBSCRIPTION_URL != '' }}
+        env:
+          SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
         run: |
           echo "=== 📡 开始配置 Clash 代理 ==="
 
           # 下载 Clash Premium
           echo "📥 下载 Clash Premium..."
-          wget -O clash.gz https://github.com/Dreamacro/clash/releases/download/premium/clash-linux-amd64-2023.08.17.gz
+          wget -q -O clash.gz https://github.com/Dreamacro/clash/releases/download/premium/clash-linux-amd64-2023.08.17.gz
           gunzip clash.gz
           chmod +x clash
 
           # 生成 Clash 配置文件
           echo "📝 生成 Clash 配置..."
-          cat > config.yaml << 'EOF'
+          cat > config.yaml << EOF
           mixed-port: 7890
           allow-lan: false
           mode: rule
@@ -79,7 +81,7 @@ jobs:
           proxy-providers:
             my-provider:
               type: http
-              url: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
+              url: ${SUBSCRIPTION_URL}
               interval: 3600
               path: ./subscription.yaml
               health-check:
@@ -107,13 +109,13 @@ jobs:
           CLASH_PID=$!
           echo "Clash PID: $CLASH_PID"
 
-          # 等待 Clash 启动完成
-          echo "⏳ 等待 Clash 启动..."
-          sleep 10
+          # 等待 Clash 启动并下载订阅
+          echo "⏳ 等待 Clash 启动和订阅下载（15秒）..."
+          sleep 15
 
           # 测试代理是否可用
           echo "🔍 测试代理连接..."
-          if curl -x http://127.0.0.1:7890 -s -o /dev/null -w "%{http_code}" https://www.google.com | grep -q "200"; then
+          if curl -x http://127.0.0.1:7890 -s -m 10 -o /dev/null -w "%{http_code}" https://www.google.com | grep -q "200"; then
             echo "✅ Clash 代理启动成功"
           else
             echo "⚠️ 代理测试失败，但继续执行"
