@@ -536,16 +536,25 @@ class CheckIn:
 
             checkin_url = self.provider.get_checkin_url()
 
+            # 准备请求头（包括 New-Api-User）
+            headers = self._prepare_checkin_headers(auth_config)
+
+            # 构建 JavaScript fetch 需要的 headers 对象
+            headers_dict = {
+                'Accept': headers.get('Accept', 'application/json, text/plain, */*'),
+                'Content-Type': 'application/json',
+            }
+            if 'New-Api-User' in headers:
+                headers_dict['New-Api-User'] = headers['New-Api-User']
+                self.logger.debug(f"🔑 [{self.account.name}] 浏览器签到包含 New-Api-User: {headers['New-Api-User']}")
+
             # 使用page.evaluate在浏览器上下文中执行fetch请求
             result = await page.evaluate("""
-                async (url) => {
+                async ({url, headers}) => {
                     try {
                         const response = await fetch(url, {
                             method: 'POST',
-                            headers: {
-                                'Accept': 'application/json, text/plain, */*',
-                                'Content-Type': 'application/json',
-                            },
+                            headers: headers,
                             credentials: 'include'
                         });
 
@@ -572,7 +581,7 @@ class CheckIn:
                         };
                     }
                 }
-            """, checkin_url)
+            """, {"url": checkin_url, "headers": headers_dict})
 
             self.logger.info(f"📊 [{self.account.name}] 签到响应: HTTP {result.get('status')}")
 
@@ -764,16 +773,25 @@ class CheckIn:
 
             user_info_url = self.provider.get_user_info_url()
 
+            # 准备请求头（包括 New-Api-User）
+            headers = self._prepare_user_info_headers(auth_config)
+
+            # 构建 JavaScript fetch 需要的 headers 对象
+            headers_dict = {
+                'Accept': headers.get('Accept', 'application/json, text/plain, */*'),
+                'X-Requested-With': 'XMLHttpRequest',
+            }
+            if 'New-Api-User' in headers:
+                headers_dict['New-Api-User'] = headers['New-Api-User']
+                self.logger.debug(f"🔑 [{self.account.name}] 浏览器用户信息查询包含 New-Api-User: {headers['New-Api-User']}")
+
             # 使用page.evaluate在浏览器上下文中执行fetch请求
             result = await page.evaluate("""
-                async (url) => {
+                async ({url, headers}) => {
                     try {
                         const response = await fetch(url, {
                             method: 'GET',
-                            headers: {
-                                'Accept': 'application/json, text/plain, */*',
-                                'X-Requested-With': 'XMLHttpRequest',
-                            },
+                            headers: headers,
                             credentials: 'include'
                         });
 
@@ -800,7 +818,7 @@ class CheckIn:
                         };
                     }
                 }
-            """, user_info_url)
+            """, {"url": user_info_url, "headers": headers_dict})
 
             self.logger.info(f"📊 [{self.account.name}] 用户信息响应: HTTP {result.get('status')}")
 
