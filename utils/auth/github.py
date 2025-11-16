@@ -191,12 +191,22 @@ class GitHubAuthenticator(Authenticator):
             wait_time = 15000 if is_ci else 10000
             logger.info(f"⏳ [{self.auth_config.username}] 等待Cloudflare验证完全通过（{wait_time/1000}秒）...")
             await page.wait_for_timeout(wait_time)
-            
+
             # 第二步：获取通过 Cloudflare 验证后的 cookies
+            # 如果 Playwright 获取失败，尝试使用 cloudscraper 降级
             logger.info(f"🔑 [{self.auth_config.username}] 获取初始cookies...")
             initial_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in initial_cookies}
-            logger.info(f"🍪 [{self.auth_config.username}] 获取到 {len(cookies_dict)} 个cookies用于API请求")
+
+            # 如果 cookies 数量太少，尝试使用 cloudscraper 增强
+            if len(cookies_dict) < 2:
+                logger.warning(f"⚠️ [{self.auth_config.username}] Playwright 获取的 cookies 较少({len(cookies_dict)}个)，尝试 cloudscraper 增强...")
+                enhanced_cookies = await self._get_waf_cookies(page, context, use_cloudscraper=True)
+                if enhanced_cookies and len(enhanced_cookies) > len(cookies_dict):
+                    cookies_dict = enhanced_cookies
+                    logger.info(f"✅ [{self.auth_config.username}] Cloudscraper 增强成功，现有 {len(cookies_dict)} 个cookies")
+            else:
+                logger.info(f"🍪 [{self.auth_config.username}] 获取到 {len(cookies_dict)} 个cookies用于API请求")
 
             # 第三步：获取 GitHub OAuth 参数（带重试）
             max_retries = 3
@@ -246,6 +256,16 @@ class GitHubAuthenticator(Authenticator):
                     logger.warning(f"⚠️ [{self.auth_config.username}] 第 {retry + 1} 次尝试失败，继续重试...")
                 else:
                     logger.error(f"❌ [{self.auth_config.username}] 所有重试均失败")
+                    # 最后尝试：使用 cloudscraper 增强 cookies 后再试一次
+                    logger.info(f"🔄 [{self.auth_config.username}] 最后尝试：使用 cloudscraper 增强...")
+                    enhanced_cookies = await self._get_waf_cookies(page, context, use_cloudscraper=True)
+                    if enhanced_cookies:
+                        cookies_dict.update(enhanced_cookies)
+                        oauth_params = await self._get_github_oauth_params(cookies_dict, page)
+                        if oauth_params:
+                            logger.info(f"✅ [{self.auth_config.username}] Cloudscraper 增强后 OAuth参数获取成功")
+                            break
+                    logger.error(f"❌ [{self.auth_config.username}] Cloudscraper 增强后仍然失败")
 
             if not oauth_params:
                 # 在 CI 环境中提供更详细的错误信息

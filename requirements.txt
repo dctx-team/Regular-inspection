@@ -5,6 +5,7 @@ pytz>=2024.1
 pyotp>=2.8.0
 cryptography>=41.0.0
 pyyaml>=6.0.0
+cloudscraper>=1.2.71
 
 # 测试依赖
 pytest>=7.4.0
