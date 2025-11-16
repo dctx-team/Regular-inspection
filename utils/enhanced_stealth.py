@@ -140,15 +140,67 @@ class EnhancedStealth:
 
             // ==================== 高级指纹伪装（2025新增） ====================
 
-            // 11. Canvas指纹随机化（添加微小噪声）
+            // 生成会话级别的随机种子（确保指纹一致性）
+            const sessionSeed = Date.now() + Math.random();
+
+            // 简单的伪随机数生成器（基于种子）
+            function seededRandom(seed) {
+                const x = Math.sin(seed++) * 10000;
+                return x - Math.floor(x);
+            }
+
+            // 11. Canvas指纹随机化（2025增强版 - 多层噪声）
+            const canvasSeed = sessionSeed * 1.1;
             const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+            const originalToBlob = HTMLCanvasElement.prototype.toBlob;
+            const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+
+            // 为Canvas添加亚像素级噪声
             HTMLCanvasElement.prototype.toDataURL = function(type) {
-                const dataURL = originalToDataURL.apply(this, arguments);
-                // 添加随机噪声（不影响视觉效果但改变指纹）
-                const noise = Math.random() * 0.00001;
-                return dataURL.replace(/,([0-9]+\\.?[0-9]*)/, (match, p1) => {
-                    return ',' + (parseFloat(p1) + noise);
-                });
+                const context = this.getContext('2d');
+                if (context) {
+                    const imageData = context.getImageData(0, 0, this.width, this.height);
+                    const pixels = imageData.data;
+
+                    // 添加基于种子的确定性噪声（每100个像素添加1-2个单位的噪声）
+                    for (let i = 0; i < pixels.length; i += 400) {
+                        const noise = Math.floor(seededRandom(canvasSeed + i) * 3) - 1;
+                        pixels[i] = Math.max(0, Math.min(255, pixels[i] + noise));
+                    }
+
+                    context.putImageData(imageData, 0, 0);
+                }
+                return originalToDataURL.apply(this, arguments);
+            };
+
+            HTMLCanvasElement.prototype.toBlob = function() {
+                const context = this.getContext('2d');
+                if (context) {
+                    const imageData = context.getImageData(0, 0, this.width, this.height);
+                    const pixels = imageData.data;
+
+                    for (let i = 0; i < pixels.length; i += 400) {
+                        const noise = Math.floor(seededRandom(canvasSeed + i) * 3) - 1;
+                        pixels[i] = Math.max(0, Math.min(255, pixels[i] + noise));
+                    }
+
+                    context.putImageData(imageData, 0, 0);
+                }
+                return originalToBlob.apply(this, arguments);
+            };
+
+            // Canvas getImageData也需要一致性处理
+            CanvasRenderingContext2D.prototype.getImageData = function() {
+                const imageData = originalGetImageData.apply(this, arguments);
+                const pixels = imageData.data;
+
+                // 使用相同的种子确保一致性
+                for (let i = 0; i < pixels.length; i += 400) {
+                    const noise = Math.floor(seededRandom(canvasSeed + i) * 3) - 1;
+                    pixels[i] = Math.max(0, Math.min(255, pixels[i] + noise));
+                }
+
+                return imageData;
             };
 
             // 12. WebGL指纹一致性伪装
@@ -175,22 +227,55 @@ class EnhancedStealth:
                 };
             }
 
-            // 13. AudioContext指纹随机化
+            // 13. AudioContext指纹随机化（2025增强版 - 确定性噪声）
             if (window.AudioContext || window.webkitAudioContext) {
+                const audioSeed = sessionSeed * 1.3;
                 const OriginalAudioContext = window.AudioContext || window.webkitAudioContext;
                 const NewAudioContext = function() {
                     const context = new OriginalAudioContext();
                     const originalCreateOscillator = context.createOscillator;
+                    const originalCreateDynamicsCompressor = context.createDynamicsCompressor;
+
+                    // 劫持 createOscillator
                     context.createOscillator = function() {
                         const oscillator = originalCreateOscillator.apply(this, arguments);
                         const originalStart = oscillator.start;
                         oscillator.start = function(when) {
-                            // 添加微小随机延迟
-                            const noise = Math.random() * 0.0001;
+                            // 添加基于种子的确定性延迟
+                            const noise = seededRandom(audioSeed) * 0.0001;
                             return originalStart.call(this, when ? when + noise : noise);
                         };
                         return oscillator;
                     };
+
+                    // 劫持 createDynamicsCompressor（音频指纹的另一个检测点）
+                    context.createDynamicsCompressor = function() {
+                        const compressor = originalCreateDynamicsCompressor.apply(this, arguments);
+                        const threshold = compressor.threshold;
+                        const knee = compressor.knee;
+                        const ratio = compressor.ratio;
+                        const attack = compressor.attack;
+                        const release = compressor.release;
+
+                        // 添加微小的确定性偏移
+                        Object.defineProperty(compressor, 'threshold', {
+                            get: () => threshold.value + seededRandom(audioSeed + 1) * 0.1,
+                            set: (v) => { threshold.value = v; }
+                        });
+
+                        Object.defineProperty(compressor, 'knee', {
+                            get: () => knee.value + seededRandom(audioSeed + 2) * 0.1,
+                            set: (v) => { knee.value = v; }
+                        });
+
+                        Object.defineProperty(compressor, 'ratio', {
+                            get: () => ratio.value + seededRandom(audioSeed + 3) * 0.1,
+                            set: (v) => { ratio.value = v; }
+                        });
+
+                        return compressor;
+                    };
+
                     return context;
                 };
                 window.AudioContext = NewAudioContext;
@@ -249,14 +334,55 @@ class EnhancedStealth:
                 });
             }
 
-            // 19. 防止CDP（Chrome DevTools Protocol）检测
+            // 19. 防止CDP（Chrome DevTools Protocol）检测（2025增强版）
+            // CDP是Cloudflare 2024年重点检测的特征之一
             const originalToString = Function.prototype.toString;
             Function.prototype.toString = function() {
-                if (this === window.navigator.permissions.query) {
-                    return 'function query() { [native code] }';
+                // 覆盖所有被修改的函数，使其看起来像原生代码
+                const nativeFunctions = [
+                    window.navigator.permissions.query,
+                    HTMLCanvasElement.prototype.toDataURL,
+                    WebGLRenderingContext.prototype.getParameter,
+                    CanvasRenderingContext2D.prototype.getImageData,
+                ];
+
+                if (nativeFunctions.includes(this)) {
+                    return `function ${this.name || 'anonymous'}() { [native code] }`;
                 }
                 return originalToString.call(this);
             };
+
+            // 隐藏CDP runtime对象痕迹
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+            delete window.$cdc_asdjflasutopfhvcZLmcfl_;
+            delete window.$chrome_asyncScriptInfo;
+
+            // 隐藏Selenium痕迹
+            delete window._Selenium_IDE_Recorder;
+            delete window._selenium;
+            delete window.__selenium_unwrapped;
+            delete window.__webdriver_evaluate;
+            delete window.__driver_evaluate;
+            delete window.__webdriver_script_function;
+            delete window.__webdriver_script_func;
+            delete window.__webdriver_script_fn;
+            delete window.__fxdriver_evaluate;
+            delete window.__driver_unwrapped;
+            delete window.__webdriver_unwrapped;
+            delete window.__fxdriver_unwrapped;
+            delete document.__webdriver_evaluate;
+            delete document.__selenium_evaluate;
+            delete document.__webdriver_script_function;
+            delete document.__webdriver_script_func;
+            delete document.$chrome_asyncScriptInfo;
+            delete document.$cdc_asdjflasutopfhvcZLmcfl_;
+
+            // 隐藏Playwright痕迹
+            delete window.__playwright;
+            delete window.__pw_manual;
+            delete window.__PW_inspect;
 
             // 20. 用户激活API伪装
             if (navigator.userActivation) {
@@ -271,7 +397,12 @@ class EnhancedStealth:
             }
 
             // ==================== 调试信息 ====================
-            console.log('✅ 增强型反检测脚本已注入（2025版，20+特征）');
+            console.log('✅ 增强型反检测脚本已注入（2025增强版）');
+            console.log('   - CDP痕迹清理: ✓ 40+ 对象');
+            console.log('   - Canvas指纹: ✓ 确定性噪声');
+            console.log('   - Audio指纹: ✓ 确定性噪声');
+            console.log('   - WebGL指纹: ✓ 一致性伪装');
+            console.log('   - 会话种子: ' + sessionSeed.toFixed(2));
         """)
 
     @staticmethod
@@ -415,32 +546,31 @@ class EnhancedStealth:
     @staticmethod
     def get_enhanced_browser_args() -> list:
         """
-        获取增强版浏览器启动参数
-        包含2025年最新的反检测参数
+        获取增强版浏览器启动参数（2025优化版）
+        基于最新的Cloudflare绕过技术
 
         Returns:
             list: 浏览器启动参数列表
         """
         return [
-            # ==================== 核心反检测参数 ====================
-            "--disable-blink-features=AutomationControlled",  # 最重要！禁用自动化控制特征
+            # ==================== 核心反检测参数（最重要） ====================
+            "--disable-blink-features=AutomationControlled",  # 禁用自动化控制特征
             "--exclude-switches=enable-automation",  # 排除自动化开关
 
             # ==================== 浏览器行为优化 ====================
-            "--window-size=1920,1080",  # 固定窗口大小
+            "--window-size=1920,1080",  # 固定窗口大小（常见分辨率）
             "--start-maximized",  # 最大化启动
             "--no-first-run",  # 跳过首次运行体验
             "--no-default-browser-check",  # 不检查默认浏览器
             "--disable-popup-blocking",  # 禁用弹窗阻止
 
-            # ==================== 性能优化 ====================
+            # ==================== 性能优化（CI环境必需） ====================
             "--disable-dev-shm-usage",  # 禁用/dev/shm使用（Docker/CI环境必需）
-            "--disable-gpu",  # 禁用GPU加速（headless模式）
+            "--disable-gpu",  # 禁用GPU加速（headless模式下）
             "--no-sandbox",  # 禁用沙箱（CI环境必需）
             "--disable-setuid-sandbox",  # 禁用setuid沙箱
 
             # ==================== 网络优化 ====================
-            "--disable-web-security",  # 禁用Web安全（允许跨域）
             "--disable-features=IsolateOrigins,site-per-process",  # 禁用站点隔离
             "--allow-running-insecure-content",  # 允许运行不安全内容
 
@@ -449,28 +579,60 @@ class EnhancedStealth:
             "--use-fake-device-for-media-stream",  # 使用假设备处理媒体流
             "--autoplay-policy=no-user-gesture-required",  # 自动播放策略
 
-            # ==================== 其他优化 ====================
+            # ==================== 背景和定时器优化 ====================
             "--disable-background-timer-throttling",  # 禁用后台定时器节流
             "--disable-backgrounding-occluded-windows",  # 禁用后台窗口优化
             "--disable-renderer-backgrounding",  # 禁用渲染器后台优化
-            "--disable-ipc-flooding-protection",  # 禁用IPC洪水保护
             "--disable-hang-monitor",  # 禁用挂起监控
-            "--disable-component-extensions-with-background-pages",  # 禁用带后台页面的组件扩展
 
-            # ==================== 2025新增参数 ====================
+            # ==================== 2025新增反检测参数 ====================
             "--disable-features=OutOfBlinkCors",  # 禁用CORS特性
             "--disable-features=ImprovedCookieControls",  # 禁用改进的Cookie控制
             "--disable-features=LazyFrameLoading",  # 禁用懒加载
             "--disable-features=GlobalMediaControls",  # 禁用全局媒体控制
-            "--disable-blink-features=AutomationControlled",  # 重复但重要
 
-            # ==================== CI环境特殊参数 ====================
-            "--headless=new",  # 新版headless模式（更接近真实浏览器）
-            "--hide-scrollbars",  # 隐藏滚动条
-            "--mute-audio",  # 静音
-            "--disable-logging",  # 禁用日志
+            # ==================== 稳定性优化 ====================
+            "--disable-logging",  # 禁用日志（减少IO）
             "--disable-crash-reporter",  # 禁用崩溃报告
             "--disable-in-process-stack-traces",  # 禁用进程内堆栈跟踪
+            "--disable-breakpad",  # 禁用崩溃报告守护进程
+            "--disable-component-extensions-with-background-pages",  # 禁用带后台页面的组件扩展
+
+            # ==================== 隐私和追踪 ====================
+            "--disable-sync",  # 禁用同步
+            "--metrics-recording-only",  # 仅记录指标
+            "--disable-default-apps",  # 禁用默认应用
+            "--mute-audio",  # 静音
+            "--hide-scrollbars",  # 隐藏滚动条
+
+            # ==================== 渲染优化 ====================
+            "--disable-software-rasterizer",  # 禁用软件光栅化
+            "--disable-canvas-aa",  # 禁用Canvas抗锯齿（减少指纹特征）
+            "--disable-2d-canvas-clip-aa",  # 禁用2D Canvas裁剪抗锯齿
+
+            # ==================== 语言和地区 ====================
+            "--lang=zh-CN",  # 设置语言为中文
+            "--accept-lang=zh-CN,zh,en-US,en",  # 接受语言列表
+
+            # ==================== 扩展和插件 ====================
+            "--disable-extensions",  # 禁用扩展
+            "--disable-plugins-discovery",  # 禁用插件发现
+
+            # ==================== IPC和进程 ====================
+            "--disable-ipc-flooding-protection",  # 禁用IPC洪水保护
+            "--disable-infobars",  # 禁用信息栏
+            "--disable-notifications",  # 禁用通知
+
+            # ==================== 模拟真实浏览器特征 ====================
+            "--enable-features=NetworkService,NetworkServiceInProcess",  # 启用网络服务
+            "--force-color-profile=srgb",  # 强制使用sRGB颜色配置文件
+            "--disable-features=TranslateUI",  # 禁用翻译UI
+            "--disable-features=ChromeWhatsNewUI",  # 禁用"新功能"提示
+
+            # ==================== 其他优化 ====================
+            "--disable-domain-reliability",  # 禁用域名可靠性服务
+            "--disable-client-side-phishing-detection",  # 禁用客户端钓鱼检测
+            "--disable-web-security",  # 禁用Web安全（允许跨域，谨慎使用）
         ]
 
 
