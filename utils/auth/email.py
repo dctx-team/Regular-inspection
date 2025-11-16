@@ -227,7 +227,67 @@ class EmailAuthenticator(Authenticator):
                 return True, None
             else:
                 logger.warning(f"⚠️ [{self.auth_config.username}] UI 正常但 cookies 不足，可能被 WAF 拦截")
-                return False, "Login may be blocked by WAF - insufficient cookies"
+
+                # ==================== cloudscraper 降级方案（2025版）====================
+                # 检测到 WAF 拦截时，尝试使用 cloudscraper 重新获取 cookies
+                logger.info(f"🔄 [{self.auth_config.username}] 尝试 cloudscraper 降级方案...")
+                try:
+                    # 调用 _get_waf_cookies 的 cloudscraper 降级逻辑
+                    # 先尝试从当前页面重新获取
+                    await page.wait_for_timeout(TimeoutConfig.SHORT_WAIT_3)
+                    retry_cookies = await context.cookies()
+                    retry_cookies_dict = {cookie["name"]: cookie["value"] for cookie in retry_cookies}
+
+                    # 如果仍然只有 WAF cookies，尝试 cloudscraper
+                    if len(retry_cookies_dict) <= 3:
+                        logger.info(f"🌐 [{self.auth_config.username}] 调用 cloudscraper 获取真实 session cookies...")
+
+                        # 使用 cloudscraper 访问登录页
+                        from utils.auth.base import CloudscraperHelper
+                        import os
+
+                        proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+                        cf_cookies = await CloudscraperHelper.get_cf_cookies(
+                            self.provider_config.get_login_url(),
+                            proxy
+                        )
+
+                        if cf_cookies and len(cf_cookies) > 3:
+                            logger.info(f"✅ [{self.auth_config.username}] Cloudscraper 获取到 {len(cf_cookies)} 个 cookies")
+
+                            # 注入 cloudscraper 获取的 cookies
+                            from urllib.parse import urlparse
+                            parsed = urlparse(self.provider_config.get_login_url())
+                            domain = parsed.netloc
+
+                            for name, value in cf_cookies.items():
+                                try:
+                                    await context.add_cookies([{
+                                        "name": name,
+                                        "value": value,
+                                        "domain": domain,
+                                        "path": "/"
+                                    }])
+                                except Exception as cookie_error:
+                                    logger.debug(f"⚠️ [{self.auth_config.username}] 注入 cookie {name} 失败: {cookie_error}")
+
+                            # 重新检查 cookies
+                            final_cookies = await context.cookies()
+                            final_cookies_dict = {cookie["name"]: cookie["value"] for cookie in final_cookies}
+
+                            if len(final_cookies_dict) > 5:
+                                logger.info(f"✅ [{self.auth_config.username}] Cloudscraper 降级成功，现在有 {len(final_cookies_dict)} 个 cookies")
+                                return True, None
+                            else:
+                                logger.warning(f"⚠️ [{self.auth_config.username}] Cloudscraper 降级后仍然 cookies 不足")
+                        else:
+                            logger.warning(f"⚠️ [{self.auth_config.username}] Cloudscraper 未能获取足够的 cookies")
+
+                except Exception as cs_error:
+                    logger.warning(f"⚠️ [{self.auth_config.username}] Cloudscraper 降级失败: {cs_error}")
+
+                # 如果 cloudscraper 降级也失败，返回 WAF 拦截错误
+                return False, "Login may be blocked by WAF - insufficient cookies (cloudscraper failed)"
 
         return True, None
 
