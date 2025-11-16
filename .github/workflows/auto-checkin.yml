@@ -57,10 +57,15 @@ jobs:
           playwright install-deps chromium
 
       - name: 设置 Clash 代理（可选）
-        if: secrets.PROXY_SUBSCRIPTION_URL != ''
         env:
           SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
         run: |
+          # 检查是否配置了代理订阅
+          if [ -z "$SUBSCRIPTION_URL" ]; then
+            echo "⚠️ 未配置代理订阅，跳过 Clash 代理设置"
+            exit 0
+          fi
+
           echo "=== 📡 开始配置 Clash 代理 ==="
 
           # 下载 Clash Premium
