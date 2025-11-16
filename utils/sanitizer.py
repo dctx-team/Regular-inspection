@@ -3,7 +3,7 @@
 """
 
 import re
-from typing import Any
+from typing import Any, Dict, List, Union
 
 
 # 敏感字段关键词
@@ -31,7 +31,7 @@ def sanitize_dict(data: dict, mask: str = "***") -> dict:
     if not isinstance(data, dict):
         return data
 
-    sanitized = {}
+    sanitized: Dict[Any, Any] = {}
     for key, value in data.items():
         key_lower = str(key).lower()
 

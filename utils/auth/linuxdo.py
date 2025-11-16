@@ -205,10 +205,16 @@ class LinuxDoAuthenticator(Authenticator):
                 return {"success": False, "error": "Cloudflare verification timeout"}
 
             # 第一步：等待额外时间确保 Cloudflare 验证完全通过
-            # 在 CI 环境中增加等待时间
+            # 在 CI 环境中增加等待时间，并支持倍增器配置
             is_ci = CIConfig.is_ci_environment()
-            wait_time = 15000 if is_ci else 10000
-            logger.info(f"⏳ [{self.auth_config.username}] 等待Cloudflare验证完全通过（{wait_time/1000}秒）...")
+            base_wait_time = 15000 if is_ci else 10000
+
+            # 支持环境变量配置的等待时间倍增器（2025新增）
+            from utils.enhanced_stealth import StealthConfig
+            wait_multiplier = StealthConfig.get_wait_time_multiplier("linux.do")
+            wait_time = int(base_wait_time * wait_multiplier)
+
+            logger.info(f"⏳ [{self.auth_config.username}] 等待Cloudflare验证完全通过（{wait_time/1000}秒，倍增器={wait_multiplier}）...")
             await page.wait_for_timeout(wait_time)
 
             # 第二步：获取通过 Cloudflare 验证后的 cookies
@@ -217,8 +223,16 @@ class LinuxDoAuthenticator(Authenticator):
             initial_cookies = await context.cookies()
             cookies_dict = {cookie["name"]: cookie["value"] for cookie in initial_cookies}
 
-            # 如果 cookies 数量太少，尝试使用 cloudscraper 增强
-            if len(cookies_dict) < 2:
+            # 检查是否有关键的 Cloudflare cookies（2025新增）
+            cf_cookies = ["cf_clearance", "__cf_bm", "cf_chl_2", "cf_chl_prog"]
+            found_cf_cookies = [name for name in cf_cookies if name in cookies_dict]
+            if found_cf_cookies:
+                logger.info(f"✅ [{self.auth_config.username}] 检测到 Cloudflare cookies: {', '.join(found_cf_cookies)}")
+            else:
+                logger.warning(f"⚠️ [{self.auth_config.username}] 未检测到 Cloudflare cookies，可能需要更长等待时间")
+
+            # 如果 cookies 数量太少（阈值从 2 提升到 3），尝试使用 cloudscraper 增强
+            if len(cookies_dict) < 3:
                 logger.warning(f"⚠️ [{self.auth_config.username}] Playwright 获取的 cookies 较少({len(cookies_dict)}个)，尝试 cloudscraper 增强...")
                 enhanced_cookies = await self._get_waf_cookies(page, context, use_cloudscraper=True)
                 if enhanced_cookies and len(enhanced_cookies) > len(cookies_dict):
@@ -443,21 +457,32 @@ class LinuxDoAuthenticator(Authenticator):
                     if login_button:
                         await login_button.click()
                         logger.info(f"✅ [{self.auth_config.username}] 点击登录按钮")
-                        
-                        # 增加等待时间，处理可能的验证 (从25秒增加到35秒，并分段检测)
+
+                        # 增加等待时间，处理可能的验证（从25秒增加到45秒，并分段检测 Cloudflare）
                         logger.info(f"⏳ [{self.auth_config.username}] 等待登录完成（可能需要处理验证）...")
-                        
-                        # 分段等待，每5秒检测一次是否已经跳转
-                        for i in range(7):  # 7次检测 = 35秒
+
+                        # 分段等待，每5秒检测一次是否已经跳转或仍在 Cloudflare 验证中（从 7 次增加到 9 次 = 45 秒）
+                        for i in range(9):
                             await page.wait_for_timeout(5000)
                             current_check_url = page.url
+                            page_content = await page.content()
+
+                            # 检查是否有 Cloudflare 验证标识
+                            cf_markers = ["just a moment", "checking your browser", "challenge-platform", "cf-challenge"]
+                            has_cf_verification = any(marker in page_content.lower() for marker in cf_markers)
+
+                            if has_cf_verification:
+                                logger.info(f"   🛡️ 检测到 Cloudflare 验证中... ({(i+1)*5}秒/45秒)")
+                                continue
+
                             # 如果已经不在登录页或challenge页，说明可能成功了
                             if "/login" not in current_check_url and "/challenge" not in current_check_url:
                                 logger.info(f"✅ [{self.auth_config.username}] 检测到URL变化，可能登录成功: {current_check_url}")
                                 break
-                            if i < 6:  # 不是最后一次
-                                logger.info(f"   ⏳ 继续等待... ({(i+1)*5}秒/{35}秒)")
-                        
+
+                            if i < 8:  # 不是最后一次
+                                logger.info(f"   ⏳ 继续等待... ({(i+1)*5}秒/45秒)")
+
                         # 检查是否有 Cloudflare 验证或其他挑战
                         current_url_after_login = page.url
                         logger.info(f"🔍 [{self.auth_config.username}] 登录后URL: {current_url_after_login}")

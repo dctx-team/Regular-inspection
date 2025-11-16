@@ -6,7 +6,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from utils.logger import setup_logger
 from utils.auth_method import AuthMethod
 
@@ -170,7 +170,7 @@ class AppConfig:
 
 def load_accounts() -> Optional[List[AccountConfig]]:
     """从环境变量加载所有账号配置"""
-    all_accounts = []
+    all_accounts: List[AccountConfig] = []
 
     # 加载 AnyRouter 账号
     anyrouter_str = os.getenv("ANYROUTER_ACCOUNTS")
@@ -210,7 +210,7 @@ def load_accounts() -> Optional[List[AccountConfig]]:
     return all_accounts if all_accounts else None
 
 
-def validate_password_strength(password: str, account_name: str, index: int) -> tuple[bool, Optional[str]]:
+def validate_password_strength(password: str, account_name: str, index: int) -> Tuple[bool, Optional[str]]:
     """验证密码强度
 
     Args:

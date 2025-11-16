@@ -38,6 +38,7 @@ from utils.constants import (
     WAF_COOKIE_NAMES,
     RATE_LIMIT_DELAY_MIN,
     RATE_LIMIT_DELAY_MAX,
+    TimeoutConfig,
 )
 from utils.enhanced_stealth import EnhancedStealth, ProxyManager, StealthConfig
 
@@ -157,6 +158,202 @@ class CheckIn:
 
         return results
 
+    async def _setup_browser_context(
+        self,
+        temp_dir: str,
+        auth_config: AuthConfig,
+        is_ci: bool
+    ) -> Tuple[Optional[BrowserContext], Optional[Page]]:
+        """
+        设置浏览器上下文和页面
+
+        Args:
+            temp_dir: 临时目录路径
+            auth_config: 认证配置
+            is_ci: 是否为CI环境
+
+        Returns:
+            (BrowserContext, Page) 成功时返回浏览器上下文和页面对象，失败时返回 (None, None)
+        """
+        # 对于需要人机验证的登录方式（GitHub、Linux.do），使用非headless模式
+        # 但在 CI 环境中必须使用 headless 模式
+        needs_human_verification = auth_config.method.requires_human_verification
+
+        if is_ci:
+            headless_mode = True
+            self.logger.info(f"ℹ️ [{self.account.name}] 检测到 CI 环境，强制使用 headless 模式")
+        else:
+            headless_mode = not needs_human_verification
+            # 如果环境变量强制指定，则覆盖默认设置
+            force_non_headless = os.getenv("FORCE_NON_HEADLESS", "false").lower() == "true"
+            if force_non_headless:
+                headless_mode = False
+                self.logger.info(f"ℹ️ [{self.account.name}] 强制使用非headless模式（FORCE_NON_HEADLESS=true）")
+            elif needs_human_verification:
+                self.logger.info(f"ℹ️ [{self.account.name}] {auth_config.method.value} 认证使用非headless模式")
+
+        # 启动独立的浏览器上下文（使用不同的临时目录防止cookie冲突）
+        try:
+            # 动态调整超时时间（CI环境中使用倍增器）
+            timeout_base = TimeoutConfig.EXTRA_LONG_60  # 基础超时60秒
+            if is_ci:
+                timeout_multiplier = CIConfig.get_ci_timeout_multiplier()
+                timeout_base = int(timeout_base * timeout_multiplier)
+                self.logger.info(f"ℹ️ [{self.account.name}] CI环境超时调整为 {timeout_base/1000}秒 (倍增器: {timeout_multiplier})")
+
+            # 获取代理配置（如果启用，支持订阅模式）
+            proxy_config = None
+            if ProxyManager.should_use_proxy():
+                # 优先使用异步方法（支持订阅），回退到同步方法（直接配置）
+                proxy_config = await ProxyManager.get_proxy_config_async()
+                if proxy_config:
+                    self.logger.info(f"🌐 [{self.account.name}] 启用代理: {proxy_config['server']}")
+
+            # 使用增强的浏览器参数
+            browser_args = EnhancedStealth.get_enhanced_browser_args()
+
+            # 检查 Playwright 是否已初始化
+            if not self._playwright:
+                self.logger.error(f"❌ [{self.account.name}] Playwright未初始化")
+                return None, None
+
+            context = await self._playwright.chromium.launch_persistent_context(
+                user_data_dir=temp_dir,
+                headless=headless_mode,
+                user_agent=BROWSER_USER_AGENT,
+                viewport=BROWSER_VIEWPORT,
+                args=browser_args,
+                slow_mo=100 if not is_ci else 0,  # CI 环境不需要减速
+                timeout=timeout_base,
+                proxy=proxy_config,  # 添加代理支持
+            )
+            self.logger.info(f"✅ [{self.account.name}] 浏览器上下文启动成功 (headless={headless_mode}, proxy={bool(proxy_config)})")
+        except Exception as e:
+            self.logger.error(f"❌ [{self.account.name}] 浏览器上下文启动失败: {e}")
+            return None, None
+
+        try:
+            page = await context.new_page()
+            self.logger.debug(f"✅ [{self.account.name}] 新页面创建成功")
+
+            # 注入增强版反检测脚本（2025版，20+特征）
+            self.logger.debug(f"🔧 [{self.account.name}] 注入增强版反检测脚本...")
+            await EnhancedStealth.inject_stealth_scripts(page)
+            self.logger.info(f"✅ [{self.account.name}] 增强版反检测脚本注入成功（20+特征）")
+
+            return context, page
+
+        except Exception as e:
+            self.logger.error(f"❌ [{self.account.name}] 创建页面失败: {e}")
+            try:
+                await context.close()
+            except:
+                pass
+            return None, None
+
+    async def _execute_authentication_flow(
+        self,
+        page: Page,
+        context: BrowserContext,
+        auth_config: AuthConfig
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """
+        执行认证和签到流程
+
+        Args:
+            page: Playwright页面对象
+            context: 浏览器上下文
+            auth_config: 认证配置
+
+        Returns:
+            (success, user_info) 执行结果和用户信息
+        """
+        # 步骤 1: 对于 AgentRouter 跳过 WAF cookies
+        waf_cookies = {}
+        if self.provider.name.lower() != "agentrouter":
+            waf_cookies = await self._get_waf_cookies(page, context)
+            if not waf_cookies:
+                self.logger.warning(f"⚠️ [{self.account.name}] 未获取到 WAF cookies，继续尝试")
+        else:
+            self.logger.info(f"ℹ️ [{self.account.name}] AgentRouter 不需要 WAF cookies，跳过")
+
+        # 步骤 1.5: 可选的人类行为模拟（支持全局和按认证方式定制）
+        if StealthConfig.should_enable_behavior_simulation(auth_config.method.value):
+            self.logger.info(f"🤖 [{self.account.name}] 开始模拟人类行为（{auth_config.method.value}）...")
+            try:
+                await EnhancedStealth.simulate_reading_behavior(page)
+                self.logger.info(f"✅ [{self.account.name}] 人类行为模拟完成")
+            except Exception as e:
+                self.logger.warning(f"⚠️ [{self.account.name}] 行为模拟失败: {e}")
+
+        # 步骤 2: 执行认证
+        authenticator = get_authenticator(self.account.name, auth_config, self.provider)
+        auth_result = await authenticator.authenticate(page, context)
+
+        if not auth_result["success"]:
+            return False, {"error": auth_result.get("error", "Authentication failed")}
+
+        # 获取认证后的 cookies 和用户信息
+        auth_cookies = auth_result.get("cookies", {})
+        auth_user_id = auth_result.get("user_id")
+        auth_username = auth_result.get("username")
+
+        # 更新 auth_config 中的用户标识（优先使用真实获取的）
+        if auth_user_id:
+            auth_config.api_user = auth_user_id
+            self.logger.info(f"✅ [{self.account.name}] 认证成功，用户ID: {auth_user_id}")
+        elif auth_username:
+            auth_config.api_user = auth_username
+            self.logger.info(f"✅ [{self.account.name}] 认证成功，用户名: {auth_username}")
+        else:
+            self.logger.info(f"✅ [{self.account.name}] 认证成功，获取到 cookies")
+
+        # 步骤 3: 执行签到（AgentRouter通过查询用户信息完成）
+        if self.provider.name.lower() == "agentrouter":
+            # AgentRouter: 查询用户信息即可完成签到
+            self.logger.info(f"ℹ️ [{self.account.name}] AgentRouter 通过查询用户信息自动签到")
+            user_info = await self._get_user_info(auth_cookies, auth_config, page=page)
+            if user_info and user_info.get("success"):
+                # 计算余额变化
+                balance_change = self._calculate_balance_change(
+                    self.account.name,
+                    auth_config.method.value,
+                    user_info
+                )
+                user_info["balance_change"] = balance_change
+
+                # 保存余额数据
+                self._save_balance_data(self.account.name, auth_config.method.value, user_info)
+
+                return True, user_info
+            else:
+                return False, {"error": "Failed to get user info for AgentRouter"}
+        else:
+            # AnyRouter: 需要显式调用签到接口（在浏览器环境中执行）
+            checkin_result = await self._do_checkin(auth_cookies, auth_config, page=page)
+            if not checkin_result["success"]:
+                return False, {"error": checkin_result.get("message", "Check-in failed")}
+
+            self.logger.info(f"✅ [{self.account.name}] 签到成功: {checkin_result.get('message', '')}")
+
+            # 步骤 4: 获取用户信息和余额（在浏览器环境中执行）
+            user_info = await self._get_user_info(auth_cookies, auth_config, page=page)
+            if user_info and user_info.get("success"):
+                # 计算余额变化
+                balance_change = self._calculate_balance_change(
+                    self.account.name,
+                    auth_config.method.value,
+                    user_info
+                )
+                user_info["balance_change"] = balance_change
+
+                # 保存余额数据
+                self._save_balance_data(self.account.name, auth_config.method.value, user_info)
+
+                return True, user_info
+            else:
+                return True, {"success": True, "message": "Check-in successful but failed to get user info"}
+
     async def _checkin_with_auth(self, auth_config: AuthConfig) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """使用指定的认证方式进行签到"""
         # OAuth 缓存降级逻辑已经在 OAuthWithCookieFallback 和各个 Authenticator 内部处理
@@ -196,7 +393,7 @@ class CheckIn:
             # 启动独立的浏览器上下文（使用不同的临时目录防止cookie冲突）
             try:
                 # 动态调整超时时间（CI环境中使用倍增器）
-                timeout_base = 60000  # 基础超时60秒
+                timeout_base = TimeoutConfig.EXTRA_LONG_60  # 基础超时60秒
                 if is_ci:
                     timeout_multiplier = CIConfig.get_ci_timeout_multiplier()
                     timeout_base = int(timeout_base * timeout_multiplier)
@@ -212,6 +409,11 @@ class CheckIn:
 
                 # 使用增强的浏览器参数
                 browser_args = EnhancedStealth.get_enhanced_browser_args()
+
+                # 检查 Playwright 是否已初始化
+                if not self._playwright:
+                    self.logger.error(f"❌ [{self.account.name}] Playwright未初始化")
+                    return False, {"error": "Playwright not initialized"}
 
                 context = await self._playwright.chromium.launch_persistent_context(
                     user_data_dir=temp_dir,
@@ -376,9 +578,9 @@ class CheckIn:
 
             # 等待页面加载
             try:
-                await page.wait_for_function('document.readyState === "complete"', timeout=5000)
+                await page.wait_for_function('document.readyState === "complete"', timeout=TimeoutConfig.ELEMENT_WAIT)
             except:
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(TimeoutConfig.SHORT_WAIT_3)
 
             # 提取 WAF cookies
             cookies = await context.cookies()
@@ -444,17 +646,15 @@ class CheckIn:
         if 'set-cookie' in response_headers:
             self.logger.info(f"🍪 [{self.account.name}] 响应包含新cookies: {response_headers['set-cookie'][:100]}...")
 
-        # 使用策略模式处理不同状态码
-        checkin_handlers = {
-            200: lambda: self._handle_200_response(response),
-            401: lambda: self._handle_401_response(client),
-            403: lambda: self._handle_403_response(),
-            404: lambda: self._handle_404_response(client, headers),
-        }
-
-        handler = checkin_handlers.get(response.status_code)
-        if handler:
-            return await handler()
+        # 使用 if-elif 链处理不同状态码
+        if response.status_code == 200:
+            return await self._handle_200_response(response)
+        elif response.status_code == 401:
+            return await self._handle_401_response(client)
+        elif response.status_code == 403:
+            return self._handle_403_response()
+        elif response.status_code == 404:
+            return await self._handle_404_response(client, headers)
         else:
             return self._handle_other_response(response)
 
@@ -524,36 +724,40 @@ class CheckIn:
         self.logger.info(f"📄 [{self.account.name}] 响应内容: {response.text[:100]}...")
         return {"success": False, "message": f"HTTP {response.status_code}"}
 
-    async def _do_checkin_in_browser(self, page: Page, cookies: Dict[str, str], auth_config: AuthConfig) -> Dict[str, Any]:
-        """在浏览器环境中执行签到请求（绕过JavaScript验证）"""
+    async def _execute_browser_fetch(
+        self,
+        page: Page,
+        url: str,
+        method: str,
+        headers: Dict[str, str],
+        include_rate_limit: bool = True
+    ) -> Optional[Dict[str, Any]]:
+        """在浏览器中执行 fetch 请求的通用方法
+
+        Args:
+            page: Playwright页面对象
+            url: 请求URL
+            method: HTTP方法 (GET/POST)
+            headers: 请求头字典
+            include_rate_limit: 是否包含速率限制延迟
+
+        Returns:
+            包含响应数据的字典，失败时返回None或包含error的字典
+        """
         try:
-            import random
-            delay = random.uniform(RATE_LIMIT_DELAY_MIN, RATE_LIMIT_DELAY_MAX)
-            self.logger.debug(f"⏱️ [{self.account.name}] 速率限制保护延迟 {delay:.2f}秒")
-            await asyncio.sleep(delay)
-
-            self.logger.info(f"🌐 [{self.account.name}] 在浏览器中执行签到请求...")
-
-            checkin_url = self.provider.get_checkin_url()
-
-            # 准备请求头（包括 New-Api-User）
-            headers = self._prepare_checkin_headers(auth_config)
-
-            # 构建 JavaScript fetch 需要的 headers 对象
-            headers_dict = {
-                'Accept': headers.get('Accept', 'application/json, text/plain, */*'),
-                'Content-Type': 'application/json',
-            }
-            if 'New-Api-User' in headers:
-                headers_dict['New-Api-User'] = headers['New-Api-User']
-                self.logger.debug(f"🔑 [{self.account.name}] 浏览器签到包含 New-Api-User: {headers['New-Api-User']}")
+            # 可选的速率限制延迟
+            if include_rate_limit:
+                import random
+                delay = random.uniform(RATE_LIMIT_DELAY_MIN, RATE_LIMIT_DELAY_MAX)
+                self.logger.debug(f"⏱️ [{self.account.name}] 速率限制保护延迟 {delay:.2f}秒")
+                await asyncio.sleep(delay)
 
             # 使用page.evaluate在浏览器上下文中执行fetch请求
             result = await page.evaluate("""
-                async ({url, headers}) => {
+                async ({url, method, headers}) => {
                     try {
                         const response = await fetch(url, {
-                            method: 'POST',
+                            method: method,
                             headers: headers,
                             credentials: 'include'
                         });
@@ -581,17 +785,19 @@ class CheckIn:
                         };
                     }
                 }
-            """, {"url": checkin_url, "headers": headers_dict})
+            """, {"url": url, "method": method, "headers": headers})
 
-            self.logger.info(f"📊 [{self.account.name}] 签到响应: HTTP {result.get('status')}")
+            self.logger.info(f"📊 [{self.account.name}] 响应: HTTP {result.get('status')}")
 
+            # 检查fetch错误
             if result.get('error'):
                 self.logger.error(f"❌ [{self.account.name}] 浏览器请求失败: {result['error']}")
-                return {"success": False, "message": f"浏览器请求失败: {result['error']}"}
+                return {"error": f"浏览器请求失败: {result['error']}"}
 
+            # 检查HTTP状态
             if not result.get('ok'):
                 self.logger.error(f"❌ [{self.account.name}] HTTP错误: {result.get('status')}")
-                return {"success": False, "message": f"HTTP {result.get('status')}"}
+                return {"error": f"HTTP {result.get('status')}"}
 
             # 处理响应数据
             data = result.get('data')
@@ -600,34 +806,77 @@ class CheckIn:
             if isinstance(data, str):
                 # 如果返回的是HTML/JavaScript，记录但不解析
                 if 'html' in content_type.lower() or 'javascript' in content_type.lower():
-                    self.logger.warning(f"⚠️ [{self.account.name}] 签到返回非JSON响应: {content_type}")
+                    self.logger.warning(f"⚠️ [{self.account.name}] 返回非JSON响应: {content_type}")
                     self.logger.info(f"📄 [{self.account.name}] 响应片段: {data[:200]}...")
 
                     # 等待一下，让JavaScript执行完毕
-                    await page.wait_for_timeout(3000)
-
-                    # 尝试通过检查用户信息来验证签到是否成功
-                    self.logger.info(f"🔍 [{self.account.name}] 尝试验证签到结果...")
-                    return {"success": True, "message": "签到请求已发送（JavaScript响应），需要验证"}
+                    await page.wait_for_timeout(TimeoutConfig.SHORT_WAIT_3)
+                    return {"non_json_response": True, "content_type": content_type}
 
                 # 尝试解析JSON字符串
                 try:
                     data = json.loads(data)
                 except json.JSONDecodeError:
                     self.logger.error(f"❌ [{self.account.name}] 无法解析响应为JSON")
-                    return {"success": False, "message": "响应不是有效的JSON"}
+                    return {"error": "响应不是有效的JSON"}
 
+            # 返回解析后的数据
             if isinstance(data, dict):
-                if data.get("success"):
-                    self.logger.info(f"✅ [{self.account.name}] 签到成功: {data.get('message', '')}")
-                    return {"success": True, "message": data.get("message", "签到成功")}
-                else:
-                    error_msg = data.get("message", "签到失败")
-                    self.logger.error(f"❌ [{self.account.name}] 签到失败: {error_msg}")
-                    return {"success": False, "message": error_msg}
+                return data
+            else:
+                self.logger.error(f"❌ [{self.account.name}] 未知响应格式")
+                return {"error": "未知响应格式"}
 
-            self.logger.error(f"❌ [{self.account.name}] 未知响应格式")
-            return {"success": False, "message": "未知响应格式"}
+        except Exception as e:
+            self.logger.error(f"❌ [{self.account.name}] 浏览器fetch异常: {type(e).__name__}: {str(e)}")
+            return {"error": f"浏览器fetch异常: {str(e)}"}
+
+    async def _do_checkin_in_browser(self, page: Page, cookies: Dict[str, str], auth_config: AuthConfig) -> Dict[str, Any]:
+        """在浏览器环境中执行签到请求（绕过JavaScript验证）"""
+        try:
+            self.logger.info(f"🌐 [{self.account.name}] 在浏览器中执行签到请求...")
+
+            checkin_url = self.provider.get_checkin_url()
+
+            # 准备请求头（包括 New-Api-User）
+            headers = self._prepare_checkin_headers(auth_config)
+
+            # 构建 JavaScript fetch 需要的 headers 对象
+            headers_dict = {
+                'Accept': headers.get('Accept', 'application/json, text/plain, */*'),
+                'Content-Type': 'application/json',
+            }
+            if 'New-Api-User' in headers:
+                headers_dict['New-Api-User'] = headers['New-Api-User']
+                self.logger.debug(f"🔑 [{self.account.name}] 浏览器签到包含 New-Api-User: {headers['New-Api-User']}")
+
+            # 使用通用的浏览器fetch方法（包含速率限制）
+            data = await self._execute_browser_fetch(
+                page=page,
+                url=checkin_url,
+                method='POST',
+                headers=headers_dict,
+                include_rate_limit=True
+            )
+
+            # 处理错误响应
+            if data is None or data.get('error'):
+                error_msg = data.get('error', '未知错误') if data else '未知错误'
+                return {"success": False, "message": error_msg}
+
+            # 处理非JSON响应（HTML/JavaScript）
+            if data.get('non_json_response'):
+                self.logger.info(f"🔍 [{self.account.name}] 尝试验证签到结果...")
+                return {"success": True, "message": "签到请求已发送（JavaScript响应），需要验证"}
+
+            # 处理正常的JSON响应
+            if data.get("success"):
+                self.logger.info(f"✅ [{self.account.name}] 签到成功: {data.get('message', '')}")
+                return {"success": True, "message": data.get("message", "签到成功")}
+            else:
+                error_msg = data.get("message", "签到失败")
+                self.logger.error(f"❌ [{self.account.name}] 签到失败: {error_msg}")
+                return {"success": False, "message": error_msg}
 
         except Exception as e:
             self.logger.error(f"❌ [{self.account.name}] 浏览器签到异常: {type(e).__name__}: {str(e)}")
@@ -785,77 +1034,25 @@ class CheckIn:
                 headers_dict['New-Api-User'] = headers['New-Api-User']
                 self.logger.debug(f"🔑 [{self.account.name}] 浏览器用户信息查询包含 New-Api-User: {headers['New-Api-User']}")
 
-            # 使用page.evaluate在浏览器上下文中执行fetch请求
-            result = await page.evaluate("""
-                async ({url, headers}) => {
-                    try {
-                        const response = await fetch(url, {
-                            method: 'GET',
-                            headers: headers,
-                            credentials: 'include'
-                        });
+            # 使用通用的浏览器fetch方法（不包含速率限制，因为用户信息查询不需要）
+            data = await self._execute_browser_fetch(
+                page=page,
+                url=user_info_url,
+                method='GET',
+                headers=headers_dict,
+                include_rate_limit=False
+            )
 
-                        const contentType = response.headers.get('content-type');
-                        let data;
-
-                        if (contentType && contentType.includes('application/json')) {
-                            data = await response.json();
-                        } else {
-                            data = await response.text();
-                        }
-
-                        return {
-                            status: response.status,
-                            ok: response.ok,
-                            contentType: contentType,
-                            data: data
-                        };
-                    } catch (error) {
-                        return {
-                            status: 0,
-                            ok: false,
-                            error: error.message
-                        };
-                    }
-                }
-            """, {"url": user_info_url, "headers": headers_dict})
-
-            self.logger.info(f"📊 [{self.account.name}] 用户信息响应: HTTP {result.get('status')}")
-
-            if result.get('error'):
-                self.logger.error(f"❌ [{self.account.name}] 浏览器请求失败: {result['error']}")
+            # 处理错误响应
+            if data is None or data.get('error'):
                 return None
 
-            if not result.get('ok'):
-                self.logger.error(f"❌ [{self.account.name}] HTTP错误: {result.get('status')}")
+            # 处理非JSON响应（HTML/JavaScript）
+            if data.get('non_json_response'):
                 return None
 
-            # 处理响应数据
-            data = result.get('data')
-            content_type = result.get('contentType', '')
-
-            if isinstance(data, str):
-                # 如果返回的是HTML/JavaScript，记录但不解析
-                if 'html' in content_type.lower() or 'javascript' in content_type.lower():
-                    self.logger.warning(f"⚠️ [{self.account.name}] 用户信息返回非JSON响应: {content_type}")
-                    self.logger.info(f"📄 [{self.account.name}] 响应片段: {data[:200]}...")
-
-                    # 等待JavaScript执行
-                    await page.wait_for_timeout(3000)
-                    return None
-
-                # 尝试解析JSON字符串
-                try:
-                    data = json.loads(data)
-                except json.JSONDecodeError:
-                    self.logger.error(f"❌ [{self.account.name}] 无法解析响应为JSON")
-                    return None
-
-            if isinstance(data, dict):
-                return self._parse_user_info_response(data)
-
-            self.logger.error(f"❌ [{self.account.name}] 未知响应格式")
-            return None
+            # 处理正常的JSON响应，使用现有的解析方法
+            return self._parse_user_info_response(data)
 
         except Exception as e:
             self.logger.error(f"❌ [{self.account.name}] 浏览器获取用户信息异常: {type(e).__name__}: {str(e)}")
@@ -906,9 +1103,9 @@ class CheckIn:
     def _calculate_balance_change(self, account_name: str, auth_method: str, current_info: Dict[str, Any]) -> Dict[str, Any]:
         """计算余额变化"""
         change = {
-            "recharge": 0,
-            "used_change": 0,
-            "quota_change": 0
+            "recharge": 0.0,
+            "used_change": 0.0,
+            "quota_change": 0.0
         }
 
         try:

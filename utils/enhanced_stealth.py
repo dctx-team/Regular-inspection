@@ -203,16 +203,16 @@ class EnhancedStealth:
                 return imageData;
             };
 
-            // 12. WebGL指纹一致性伪装
+            // 12. WebGL指纹一致性伪装（2025增强 - VENDOR 和 RENDERER 匹配）
             const getParameter = WebGLRenderingContext.prototype.getParameter;
             WebGLRenderingContext.prototype.getParameter = function(parameter) {
                 // UNMASKED_VENDOR_WEBGL
                 if (parameter === 37445) {
-                    return 'Intel Inc.';
+                    return 'Google Inc. (Intel)';
                 }
-                // UNMASKED_RENDERER_WEBGL
+                // UNMASKED_RENDERER_WEBGL (确保与 VENDOR 匹配)
                 if (parameter === 37446) {
-                    return 'Intel Iris OpenGL Engine';
+                    return 'ANGLE (Intel, Intel(R) UHD Graphics 620 (0x00005917) Direct3D11 vs_5_0 ps_5_0, D3D11)';
                 }
                 return getParameter.apply(this, arguments);
             };
@@ -221,8 +221,8 @@ class EnhancedStealth:
             if (window.WebGL2RenderingContext) {
                 const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
                 WebGL2RenderingContext.prototype.getParameter = function(parameter) {
-                    if (parameter === 37445) return 'Intel Inc.';
-                    if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+                    if (parameter === 37445) return 'Google Inc. (Intel)';
+                    if (parameter === 37446) return 'ANGLE (Intel, Intel(R) UHD Graphics 620 (0x00005917) Direct3D11 vs_5_0 ps_5_0, D3D11)';
                     return getParameter2.apply(this, arguments);
                 };
             }
@@ -697,17 +697,98 @@ class EnhancedStealth:
             delete navigator.mozBattery;
             delete navigator.webkitBattery;
 
+            // ==================== 2025最新 - Fetch API 拦截（注入 sec-ch-ua 请求头） ====================
+            // 28. 拦截 Fetch API，注入真实的 sec-ch-ua 请求头
+            const originalFetch = window.fetch;
+            window.fetch = function(...args) {
+                // 获取请求 URL 和配置
+                const [resource, config] = args;
+
+                // 创建或修改 headers
+                const headers = new Headers(config?.headers || {});
+
+                // 注入 2025 年真实的 sec-ch-ua 系列请求头（Chrome 131）
+                if (!headers.has('sec-ch-ua')) {
+                    headers.set('sec-ch-ua', '"Chromium";v="131", "Not_A Brand";v="24"');
+                }
+                if (!headers.has('sec-ch-ua-mobile')) {
+                    headers.set('sec-ch-ua-mobile', '?0');
+                }
+                if (!headers.has('sec-ch-ua-platform')) {
+                    headers.set('sec-ch-ua-platform', '"Windows"');
+                }
+                if (!headers.has('sec-ch-ua-full-version-list')) {
+                    headers.set('sec-ch-ua-full-version-list', '"Chromium";v="131.0.6778.86", "Not_A Brand";v="24.0.0.0"');
+                }
+                if (!headers.has('sec-ch-ua-platform-version')) {
+                    headers.set('sec-ch-ua-platform-version', '"10.0.0"');
+                }
+                if (!headers.has('sec-ch-ua-arch')) {
+                    headers.set('sec-ch-ua-arch', '"x86"');
+                }
+                if (!headers.has('sec-ch-ua-bitness')) {
+                    headers.set('sec-ch-ua-bitness', '"64"');
+                }
+                if (!headers.has('sec-ch-ua-model')) {
+                    headers.set('sec-ch-ua-model', '""');
+                }
+
+                // 创建新的配置对象
+                const newConfig = {
+                    ...config,
+                    headers: headers
+                };
+
+                // 调用原始 fetch
+                return originalFetch.call(this, resource, newConfig);
+            };
+
+            // 29. 拦截 XMLHttpRequest，注入 sec-ch-ua 请求头
+            const originalXHROpen = XMLHttpRequest.prototype.open;
+            const originalXHRSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+
+            XMLHttpRequest.prototype.open = function(...args) {
+                this._shouldInjectHeaders = true;
+                return originalXHROpen.apply(this, args);
+            };
+
+            XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+                // 记录用户设置的请求头
+                if (!this._customHeaders) {
+                    this._customHeaders = new Set();
+                }
+                this._customHeaders.add(name.toLowerCase());
+                return originalXHRSetRequestHeader.apply(this, arguments);
+            };
+
+            XMLHttpRequest.prototype.send = function(body) {
+                if (this._shouldInjectHeaders) {
+                    // 注入 sec-ch-ua 系列请求头（如果用户没有设置）
+                    if (!this._customHeaders?.has('sec-ch-ua')) {
+                        originalXHRSetRequestHeader.call(this, 'sec-ch-ua', '"Chromium";v="131", "Not_A Brand";v="24"');
+                    }
+                    if (!this._customHeaders?.has('sec-ch-ua-mobile')) {
+                        originalXHRSetRequestHeader.call(this, 'sec-ch-ua-mobile', '?0');
+                    }
+                    if (!this._customHeaders?.has('sec-ch-ua-platform')) {
+                        originalXHRSetRequestHeader.call(this, 'sec-ch-ua-platform', '"Windows"');
+                    }
+                }
+                return XMLHttpRequest.prototype.__proto__.send.apply(this, arguments);
+            };
+
             // ==================== 调试信息（更新版） ====================
-            console.log('✅ 增强型反检测脚本已注入（2025最新版）');
+            console.log('✅ 增强型反检测脚本已注入（2025最新版 v2）');
             console.log('   - CDP痕迹清理: ✓ 40+ 对象');
             console.log('   - Canvas指纹: ✓ 确定性噪声 + 缓存一致性');
             console.log('   - Audio指纹: ✓ 确定性噪声');
-            console.log('   - WebGL指纹: ✓ 增强参数伪装');
+            console.log('   - WebGL指纹: ✓ 增强参数伪装（VENDOR/RENDERER 匹配）');
             console.log('   - Performance API: ✓ 真实时间线');
             console.log('   - Event Trust: ✓ isTrusted修复');
             console.log('   - Plugin Array: ✓ 完整列表');
             console.log('   - Permissions API: ✓ 多权限伪装');
             console.log('   - Battery API: ✓ 已移除');
+            console.log('   - Fetch/XHR API: ✓ sec-ch-ua 请求头注入');
             console.log('   - 会话种子: ' + sessionSeed.toFixed(2));
         """)
 

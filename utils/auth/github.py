@@ -282,7 +282,35 @@ class GitHubAuthenticator(Authenticator):
             oauth_url = f"https://github.com/login/oauth/authorize?response_type=code&client_id={client_id}&state={auth_state}&scope=user:email"
             logger.info(f"🔗 [{self.auth_config.username}] 访问 GitHub OAuth URL...")
 
-            await page.goto(oauth_url, wait_until="domcontentloaded", timeout=60000)
+            # CI 环境中增加超时和重试（解决 Playwright > 1.42.1 的 OAuth 重定向 Bug）
+            oauth_timeout = 60000
+            oauth_max_retries = 1
+            if is_ci:
+                oauth_timeout = int(60000 * CIConfig.get_ci_timeout_multiplier())  # 默认 180秒
+                oauth_max_retries = CIConfig.get_retry_count()  # 默认 3次
+                logger.info(f"🔧 [{self.auth_config.username}] CI环境：OAuth超时={oauth_timeout}ms, 重试={oauth_max_retries}次")
+
+            # 重试访问 OAuth URL
+            oauth_goto_success = False
+            for oauth_retry in range(oauth_max_retries):
+                try:
+                    if oauth_retry > 0:
+                        logger.info(f"🔄 [{self.auth_config.username}] OAuth URL 访问重试 {oauth_retry + 1}/{oauth_max_retries}")
+                        await page.wait_for_timeout(5000)  # 重试前等待
+
+                    await page.goto(oauth_url, wait_until="domcontentloaded", timeout=oauth_timeout)
+                    oauth_goto_success = True
+                    break
+                except Exception as oauth_error:
+                    if oauth_retry < oauth_max_retries - 1:
+                        logger.warning(f"⚠️ [{self.auth_config.username}] OAuth URL 访问失败（尝试 {oauth_retry + 1}）: {oauth_error}")
+                    else:
+                        logger.error(f"❌ [{self.auth_config.username}] OAuth URL 访问失败（所有重试耗尽）: {oauth_error}")
+                        return {"success": False, "error": f"OAuth URL access failed after {oauth_max_retries} retries: {sanitize_exception(oauth_error)}"}
+
+            if not oauth_goto_success:
+                return {"success": False, "error": "Failed to access OAuth URL"}
+
             await page.wait_for_timeout(2000)
 
             # 第四步：检查是否需要登录 GitHub
@@ -337,8 +365,13 @@ class GitHubAuthenticator(Authenticator):
 
             # 第六步：等待OAuth回调
             logger.info(f"⏳ [{self.auth_config.username}] 等待OAuth回调...")
+
+            # CI 环境中使用调整后的超时（与 OAuth URL 访问一致）
+            callback_timeout = oauth_timeout
+            logger.info(f"🔧 [{self.auth_config.username}] OAuth回调超时={callback_timeout}ms")
+
             try:
-                await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=60000)
+                await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=callback_timeout)
             except Exception as e:
                 logger.warning(f"⚠️ [{self.auth_config.username}] OAuth回调等待超时，检查当前URL...")
                 current_url = page.url

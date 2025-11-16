@@ -31,16 +31,20 @@ logger = setup_logger(__name__)
 
 
 class CloudscraperHelper:
-    """cloudscraper 辅助类 - 用于获取绕过 Cloudflare 的初始 cookies（降级方案）"""
+    """cloudscraper 辅助类 - 用于获取绕过 Cloudflare 的初始 cookies（降级方案）
+
+    2025 增强版：支持更多的浏览器指纹伪装参数
+    """
 
     @staticmethod
-    async def get_cf_cookies(url: str, proxy: Optional[str] = None) -> Dict[str, str]:
+    async def get_cf_cookies(url: str, proxy: Optional[str] = None, custom_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         """
         使用 cloudscraper 获取绕过 Cloudflare 的 cookies
 
         Args:
             url: 目标网站 URL
             proxy: 代理地址（可选），格式：http://host:port
+            custom_headers: 自定义请求头（可选）
 
         Returns:
             Dict[str, str]: cookies 字典
@@ -50,13 +54,15 @@ class CloudscraperHelper:
             try:
                 import cloudscraper
 
-                # 创建 scraper 实例
+                # 创建 scraper 实例（2025 增强版 - 更真实的浏览器指纹）
                 scraper = cloudscraper.create_scraper(
                     browser={
                         'browser': 'chrome',
                         'platform': 'windows',
                         'desktop': True
-                    }
+                    },
+                    # 启用调试模式（可选）
+                    debug=False
                 )
 
                 # 配置代理
@@ -67,15 +73,56 @@ class CloudscraperHelper:
                         'https': proxy
                     }
 
-                # 访问目标网站
-                response = scraper.get(url, proxies=proxies, timeout=30)
+                # 构造请求头（2025 最新 Chrome 131）
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'sec-ch-ua': '"Chromium";v="131", "Not_A Brand";v="24"',
+                    'sec-ch-ua-mobile': '?0',
+                    'sec-ch-ua-platform': '"Windows"',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-User': '?1',
+                    'Sec-Fetch-Dest': 'document',
+                }
+
+                # 合并自定义请求头
+                if custom_headers:
+                    headers.update(custom_headers)
+
+                # 访问目标网站（增加超时时间到 60 秒）
+                response = scraper.get(
+                    url,
+                    proxies=proxies,
+                    headers=headers,
+                    timeout=60,
+                    allow_redirects=True
+                )
+
+                # 检查响应状态
+                if response.status_code != 200:
+                    logger.debug(f"⚠️ Cloudscraper 返回状态码 {response.status_code}")
+                    return {}
 
                 # 提取 cookies
                 cookies = {cookie.name: cookie.value for cookie in scraper.cookies}
+
+                # 检查是否成功获取关键 cookies
+                cf_cookies = ["cf_clearance", "__cf_bm", "cf_chl_2"]
+                found_cf = [name for name in cf_cookies if name in cookies]
+                if found_cf:
+                    logger.info(f"✅ Cloudscraper 成功获取 Cloudflare cookies: {', '.join(found_cf)}")
+                else:
+                    logger.debug(f"⚠️ Cloudscraper 未获取到 Cloudflare 关键 cookies")
+
                 return cookies
 
             except ImportError:
                 logger.debug("⚠️ cloudscraper 未安装，跳过此降级方案")
+                logger.debug("   提示：运行 'pip install cloudscraper' 安装")
                 return {}
             except Exception as e:
                 logger.debug(f"⚠️ Cloudscraper 获取失败: {e}")
@@ -367,9 +414,12 @@ class Authenticator(ABC):
 
     async def _get_waf_cookies(self, page: Page, context: BrowserContext, use_cloudscraper: bool = True) -> Dict[str, str]:
         """
-        获取 WAF cookies - 支持 Playwright + cloudscraper 双重降级
+        获取 WAF cookies - 支持 Playwright + TLS 指纹 + cloudscraper 三重降级（2025增强版）
 
-        优先使用 Playwright（更可靠），失败时降级到 cloudscraper
+        优先级：
+        1. Playwright（当前方案，最可靠）
+        2. TLS 指纹伪装（curl-cffi，最强）
+        3. cloudscraper（次选）
 
         Args:
             page: Playwright 页面对象
@@ -400,7 +450,45 @@ class Authenticator(ABC):
         except Exception as e:
             logger.warning(f"⚠️ Playwright 获取 WAF cookies 失败: {e}")
 
-        # 方案 B：降级到 cloudscraper（仅在启用且 Playwright 失败时）
+        # 方案 B：尝试 TLS 指纹伪装（2025 新增，可选）
+        try:
+            from utils.tls_fingerprint import TLSFingerprintHelper
+
+            if TLSFingerprintHelper.is_enabled() and TLSFingerprintHelper.is_available():
+                logger.info("🔐 降级使用 TLS 指纹伪装...")
+
+                # 从环境变量获取代理配置（可选）
+                proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+
+                tls_cookies = await TLSFingerprintHelper.get_cookies_with_tls_fingerprint(
+                    self.provider_config.get_login_url(),
+                    proxy
+                )
+
+                if tls_cookies:
+                    logger.info(f"✅ TLS 指纹获取成功: {len(tls_cookies)} 个 cookies")
+
+                    # 将 TLS 指纹获取的 cookies 注入到 Playwright context
+                    domain = self._get_domain(self.provider_config.get_login_url())
+                    for name, value in tls_cookies.items():
+                        try:
+                            await context.add_cookies([{
+                                "name": name,
+                                "value": value,
+                                "domain": domain,
+                                "path": "/"
+                            }])
+                        except Exception as cookie_error:
+                            logger.debug(f"⚠️ 注入 cookie {name} 失败: {cookie_error}")
+
+                    return tls_cookies
+
+        except ImportError:
+            logger.debug("ℹ️ TLS 指纹模块未导入（可选功能）")
+        except Exception as e:
+            logger.debug(f"⚠️ TLS 指纹也失败: {e}")
+
+        # 方案 C：降级到 cloudscraper（仅在启用且前两种方案失败时）
         if use_cloudscraper:
             logger.info("ℹ️ 降级使用 cloudscraper...")
 
@@ -434,7 +522,7 @@ class Authenticator(ABC):
             except Exception as e:
                 logger.warning(f"⚠️ Cloudscraper 也失败: {e}")
 
-        # 方案 C：如果都失败，返回空字典（不阻塞后续流程）
+        # 方案 D：如果都失败，返回空字典（不阻塞后续流程）
         logger.warning("⚠️ 所有 WAF cookies 获取方案均失败，使用空 cookies 继续")
         return {}
 

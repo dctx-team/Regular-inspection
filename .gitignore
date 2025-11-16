@@ -29,6 +29,7 @@ ENV/
 
 # Playwright
 .playwright/
+.playwright-state/
 
 # 数据文件
 # balance_hash.txt  # 由 GitHub Actions 自动提交，用于余额变更追踪
