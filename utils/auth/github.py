@@ -318,12 +318,22 @@ class GitHubAuthenticator(Authenticator):
             # 第六步：等待OAuth回调
             logger.info(f"⏳ [{self.auth_config.username}] 等待OAuth回调...")
             try:
-                await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=30000)
+                await page.wait_for_url(f"**{self.provider_config.base_url}/oauth/**", timeout=60000)
             except Exception as e:
                 logger.warning(f"⚠️ [{self.auth_config.username}] OAuth回调等待超时，检查当前URL...")
                 current_url = page.url
+                page_title = await page.title()
+                logger.error(f"❌ OAuth 回调超时")
+                logger.info(f"  当前URL: {current_url}")
+                logger.info(f"  页面标题: {page_title}")
+
+                # 检查是否卡在某个特定页面
                 if "/oauth/" in current_url:
                     logger.info(f"✅ [{self.auth_config.username}] 已在OAuth回调页面")
+                elif "github.com/login" in current_url:
+                    return {"success": False, "error": "OAuth callback timeout: Still on GitHub login page"}
+                elif "2fa" in current_url.lower() or "two-factor" in current_url.lower():
+                    return {"success": False, "error": "OAuth callback timeout: Stuck on 2FA page"}
                 else:
                     return {"success": False, "error": f"OAuth callback timeout: {sanitize_exception(e)}"}
 
@@ -363,65 +373,128 @@ class GitHubAuthenticator(Authenticator):
             return {"success": False, "error": f"GitHub auth failed: {sanitize_exception(e)}"}
 
     async def _handle_2fa(self, page: Page) -> bool:
-        """处理 GitHub 2FA 认证"""
-        try:
-            logger.info("🔐 处理 GitHub 2FA 认证...")
+        """处理 GitHub 2FA 认证（支持重试）"""
+        import asyncio
 
-            # 等待 2FA 输入框出现
-            await page.wait_for_selector('input[name="otp"]', timeout=10000)
+        max_2fa_attempts = 2
+        for attempt in range(max_2fa_attempts):
+            try:
+                logger.info(f"🔐 处理 GitHub 2FA 认证（尝试 {attempt + 1}/{max_2fa_attempts}）...")
 
-            # 方法1: 从环境变量获取预先生成的 2FA 代码
-            otp_code = os.getenv('GITHUB_2FA_CODE')
-            if otp_code:
-                logger.info("📱 使用环境变量中的 2FA 代码")
-                await page.fill('input[name="otp"]', otp_code)
-                await page.click('button[type="submit"]', timeout=5000)
-                await page.wait_for_load_state("networkidle", timeout=10000)
-                return True
+                # 等待 2FA 输入框出现（增加超时到15秒）
+                await page.wait_for_selector('input[name="otp"]', timeout=15000)
 
-            # 方法2: 使用 TOTP 密钥生成代码
-            totp_secret = os.getenv('GITHUB_TOTP_SECRET')
-            if totp_secret:
-                logger.info("🔑 使用 TOTP 密钥生成 2FA 代码")
-                try:
-                    import pyotp
-                    totp = pyotp.TOTP(totp_secret)
-                    otp_code = totp.now()
-                    logger.info(f"🔢 生成的 2FA 代码: {otp_code}")
+                # 方法1: 从环境变量获取预先生成的 2FA 代码
+                otp_code = os.getenv('GITHUB_2FA_CODE')
+                if otp_code:
+                    logger.info("📱 使用环境变量中的 2FA 代码")
                     await page.fill('input[name="otp"]', otp_code)
                     await page.click('button[type="submit"]', timeout=5000)
-                    await page.wait_for_load_state("networkidle", timeout=10000)
-                    return True
-                except ImportError:
-                    logger.error("❌ 需要安装 pyotp 库: pip install pyotp")
-                except Exception as e:
-                    logger.error(f"❌ TOTP 生成失败: {e}")
 
-            # 方法3: 尝试常见的备用恢复代码
-            recovery_codes_str = os.getenv('GITHUB_RECOVERY_CODES')
-            if recovery_codes_str:
-                recovery_codes = recovery_codes_str.split(',')
-                logger.info(f"🔄 尝试使用恢复代码 (剩余 {len(recovery_codes)} 个)")
-                for i, code in enumerate(recovery_codes):
+                    # 等待导航完成（增加超时到30秒）
                     try:
-                        await page.fill('input[name="otp"]', code.strip())
-                        await page.click('button[type="submit"]', timeout=5000)
-                        await page.wait_for_load_state("networkidle", timeout=10000)
-                        logger.info(f"✅ 恢复代码 {i+1} 验证成功")
-                        return True
+                        await page.wait_for_load_state("networkidle", timeout=30000)
                     except:
-                        logger.error(f"❌ 恢复代码 {i+1} 验证失败，尝试下一个...")
-                        await page.wait_for_timeout(1000)
+                        await page.wait_for_timeout(3000)
+
+                    # 检查是否成功跳转
+                    current_url = page.url
+                    if "2fa" not in current_url.lower() and "two-factor" not in current_url.lower():
+                        logger.info("✅ 2FA 认证成功")
+                        return True
+                    elif attempt < max_2fa_attempts - 1:
+                        logger.warning(f"⚠️ 2FA 尝试 {attempt + 1} 失败（仍在2FA页面），重试...")
+                        await asyncio.sleep(2)
                         continue
+                    else:
+                        raise Exception(f"2FA authentication failed after {max_2fa_attempts} attempts (still on 2FA page)")
 
-            logger.error("❌ 无法自动处理 2FA，请手动处理或配置以下环境变量:")
-            logger.info("   - GITHUB_2FA_CODE: 预先生成的 2FA 代码")
-            logger.info("   - GITHUB_TOTP_SECRET: TOTP 密钥")
-            logger.info("   - GITHUB_RECOVERY_CODES: 恢复代码列表 (逗号分隔)")
-            return False
+                # 方法2: 使用 TOTP 密钥生成代码
+                totp_secret = os.getenv('GITHUB_TOTP_SECRET')
+                if totp_secret:
+                    logger.info("🔑 使用 TOTP 密钥生成 2FA 代码")
+                    try:
+                        import pyotp
+                        totp = pyotp.TOTP(totp_secret)
+                        otp_code = totp.now()
+                        logger.info(f"🔢 生成的 2FA 代码: {otp_code}")
+                        await page.fill('input[name="otp"]', otp_code)
+                        await page.click('button[type="submit"]', timeout=5000)
 
-        except Exception as e:
-            logger.error(f"❌ 2FA 处理异常: {e}")
-            return False
+                        # 等待导航完成（增加超时到30秒）
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=30000)
+                        except:
+                            await page.wait_for_timeout(3000)
+
+                        # 检查是否成功跳转
+                        current_url = page.url
+                        if "2fa" not in current_url.lower() and "two-factor" not in current_url.lower():
+                            logger.info("✅ 2FA 认证成功")
+                            return True
+                        elif attempt < max_2fa_attempts - 1:
+                            logger.warning(f"⚠️ 2FA 尝试 {attempt + 1} 失败（仍在2FA页面），重试...")
+                            await asyncio.sleep(2)
+                            continue
+                        else:
+                            raise Exception(f"2FA authentication failed after {max_2fa_attempts} attempts (still on 2FA page)")
+                    except ImportError:
+                        logger.error("❌ 需要安装 pyotp 库: pip install pyotp")
+                    except Exception as e:
+                        if "failed after" in str(e):
+                            raise
+                        logger.error(f"❌ TOTP 生成失败: {e}")
+                        if attempt < max_2fa_attempts - 1:
+                            logger.warning(f"⚠️ 2FA 尝试 {attempt + 1} 失败，重试...")
+                            await asyncio.sleep(2)
+                            continue
+
+                # 方法3: 尝试常见的备用恢复代码
+                recovery_codes_str = os.getenv('GITHUB_RECOVERY_CODES')
+                if recovery_codes_str:
+                    recovery_codes = recovery_codes_str.split(',')
+                    logger.info(f"🔄 尝试使用恢复代码 (剩余 {len(recovery_codes)} 个)")
+                    for i, code in enumerate(recovery_codes):
+                        try:
+                            await page.fill('input[name="otp"]', code.strip())
+                            await page.click('button[type="submit"]', timeout=5000)
+
+                            # 等待导航完成（增加超时到30秒）
+                            try:
+                                await page.wait_for_load_state("networkidle", timeout=30000)
+                            except:
+                                await page.wait_for_timeout(3000)
+
+                            # 检查是否成功跳转
+                            current_url = page.url
+                            if "2fa" not in current_url.lower() and "two-factor" not in current_url.lower():
+                                logger.info(f"✅ 恢复代码 {i+1} 验证成功")
+                                return True
+                        except:
+                            logger.error(f"❌ 恢复代码 {i+1} 验证失败，尝试下一个...")
+                            await page.wait_for_timeout(1000)
+                            continue
+
+                # 如果所有方法都没有配置或失败
+                if attempt < max_2fa_attempts - 1:
+                    logger.warning(f"⚠️ 2FA 尝试 {attempt + 1} 失败，重试...")
+                    await asyncio.sleep(2)
+                    continue
+                else:
+                    logger.error("❌ 无法自动处理 2FA，请手动处理或配置以下环境变量:")
+                    logger.info("   - GITHUB_2FA_CODE: 预先生成的 2FA 代码")
+                    logger.info("   - GITHUB_TOTP_SECRET: TOTP 密钥")
+                    logger.info("   - GITHUB_RECOVERY_CODES: 恢复代码列表 (逗号分隔)")
+                    return False
+
+            except Exception as e:
+                if attempt < max_2fa_attempts - 1:
+                    logger.warning(f"⚠️ 2FA 尝试 {attempt + 1} 失败: {e}，重试...")
+                    await asyncio.sleep(2)
+                else:
+                    logger.error(f"❌ 2FA authentication failed after {max_2fa_attempts} attempts: {e}")
+                    return False
+
+        return False
 
 

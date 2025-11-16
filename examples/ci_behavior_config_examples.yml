@@ -1,0 +1,259 @@
+# CI 环境人类行为模拟配置示例
+
+# ============================================================
+# GitHub Actions 工作流配置示例
+# ============================================================
+
+# .github/workflows/checkin.yml
+name: Auto Check-in with Behavior Simulation
+
+on:
+  schedule:
+    # 每天 UTC 00:00 运行（北京时间 08:00）
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+
+    env:
+      # ============================================================
+      # 人类行为模拟配置
+      # ============================================================
+
+      # 启用人类行为模拟（默认：true）
+      # 设置为 false 可禁用所有行为模拟功能
+      CI_ENABLE_BEHAVIOR_SIMULATION: true
+
+      # 行为模拟强度（默认：medium）
+      # 可选值：light, medium, heavy
+      # - light: 轻度模拟，快速但可能检测率较高
+      # - medium: 中度模拟，平衡性能和效果（推荐）
+      # - heavy: 重度模拟，慢但最像真人
+      CI_BEHAVIOR_INTENSITY: medium
+
+      # ============================================================
+      # 其他 CI 配置（可选）
+      # ============================================================
+
+      # 重试次数（默认：3）
+      CI_RETRY_COUNT: 3
+
+      # 超时时间倍增器（默认：2.0）
+      # CI 环境下的超时时间会乘以这个倍数
+      CI_TIMEOUT_MULTIPLIER: 2.0
+
+      # 是否使用延长的等待时间（默认：true）
+      CI_EXTENDED_WAIT: true
+
+      # 跳过 Cloudflare 验证检查（默认：false）
+      # 仅用于调试，生产环境不建议设置为 true
+      SKIP_CLOUDFLARE_CHECK: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+
+      - name: Run check-in
+        run: python checkin.py
+        env:
+          # 从 GitHub Secrets 读取敏感信息
+          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
+
+
+# ============================================================
+# 场景 1: 高验证通过率优先（推荐用于频繁被 Cloudflare 拦截的情况）
+# ============================================================
+
+jobs:
+  checkin-high-success-rate:
+    runs-on: ubuntu-latest
+    env:
+      CI_ENABLE_BEHAVIOR_SIMULATION: true
+      CI_BEHAVIOR_INTENSITY: heavy      # 使用重度模拟
+      CI_TIMEOUT_MULTIPLIER: 3.0        # 增加超时倍数
+      CI_RETRY_COUNT: 5                 # 增加重试次数
+
+
+# ============================================================
+# 场景 2: 快速运行优先（推荐用于稳定环境或时间敏感任务）
+# ============================================================
+
+jobs:
+  checkin-fast:
+    runs-on: ubuntu-latest
+    env:
+      CI_ENABLE_BEHAVIOR_SIMULATION: true
+      CI_BEHAVIOR_INTENSITY: light      # 使用轻度模拟
+      CI_TIMEOUT_MULTIPLIER: 1.5        # 减小超时倍数
+      CI_RETRY_COUNT: 2                 # 减少重试次数
+
+
+# ============================================================
+# 场景 3: 调试模式（用于排查问题）
+# ============================================================
+
+jobs:
+  checkin-debug:
+    runs-on: ubuntu-latest
+    env:
+      CI_ENABLE_BEHAVIOR_SIMULATION: false  # 禁用行为模拟以观察原始行为
+      SKIP_CLOUDFLARE_CHECK: true           # 跳过 Cloudflare 检查
+      CI_TIMEOUT_MULTIPLIER: 1.0            # 不增加超时
+      # 启用详细日志
+      PYTHONUNBUFFERED: 1
+
+
+# ============================================================
+# 场景 4: A/B 测试（同时运行多种配置进行对比）
+# ============================================================
+
+jobs:
+  # 启用行为模拟
+  checkin-with-simulation:
+    runs-on: ubuntu-latest
+    env:
+      CI_ENABLE_BEHAVIOR_SIMULATION: true
+      CI_BEHAVIOR_INTENSITY: medium
+    steps:
+      - uses: actions/checkout@v3
+      - run: python checkin.py
+
+  # 不启用行为模拟
+  checkin-without-simulation:
+    runs-on: ubuntu-latest
+    env:
+      CI_ENABLE_BEHAVIOR_SIMULATION: false
+    steps:
+      - uses: actions/checkout@v3
+      - run: python checkin.py
+
+
+# ============================================================
+# 本地测试配置示例
+# ============================================================
+
+# 在本地测试时，可以通过环境变量模拟 CI 环境：
+
+# Windows (PowerShell):
+$env:CI="true"
+$env:CI_ENABLE_BEHAVIOR_SIMULATION="true"
+$env:CI_BEHAVIOR_INTENSITY="medium"
+python checkin.py
+
+# Linux/macOS (Bash):
+export CI=true
+export CI_ENABLE_BEHAVIOR_SIMULATION=true
+export CI_BEHAVIOR_INTENSITY=medium
+python checkin.py
+
+
+# ============================================================
+# Docker 配置示例
+# ============================================================
+
+# docker-compose.yml
+version: '3.8'
+
+services:
+  checkin:
+    image: python:3.11-slim
+    environment:
+      - CI=true
+      - CI_ENABLE_BEHAVIOR_SIMULATION=true
+      - CI_BEHAVIOR_INTENSITY=medium
+      - CI_TIMEOUT_MULTIPLIER=2.0
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: python checkin.py
+
+
+# ============================================================
+# GitLab CI 配置示例
+# ============================================================
+
+# .gitlab-ci.yml
+checkin:
+  stage: deploy
+  image: python:3.11
+  variables:
+    CI_ENABLE_BEHAVIOR_SIMULATION: "true"
+    CI_BEHAVIOR_INTENSITY: "medium"
+    CI_TIMEOUT_MULTIPLIER: "2.0"
+  script:
+    - pip install -r requirements.txt
+    - playwright install chromium
+    - python checkin.py
+  only:
+    - schedules
+
+
+# ============================================================
+# CircleCI 配置示例
+# ============================================================
+
+# .circleci/config.yml
+version: 2.1
+
+jobs:
+  checkin:
+    docker:
+      - image: cimg/python:3.11
+    environment:
+      CI_ENABLE_BEHAVIOR_SIMULATION: true
+      CI_BEHAVIOR_INTENSITY: medium
+    steps:
+      - checkout
+      - run: pip install -r requirements.txt
+      - run: playwright install chromium
+      - run: python checkin.py
+
+workflows:
+  scheduled-checkin:
+    triggers:
+      - schedule:
+          cron: "0 0 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
+      - checkin
+
+
+# ============================================================
+# 配置建议
+# ============================================================
+
+# 1. 首次使用建议
+#    - 使用 medium 强度
+#    - 启用延长等待
+#    - 保持默认重试次数
+
+# 2. 优化建议
+#    - 如果验证成功率低于 70%，提高强度到 heavy
+#    - 如果运行时间过长，降低强度到 light
+#    - 根据实际情况调整超时倍数
+
+# 3. 监控指标
+#    - 验证成功率
+#    - 平均运行时间
+#    - Cloudflare 拦截次数
+#    - 重试次数
+
+# 4. 故障排查
+#    - 查看日志中的 "🤖 CI 环境：..." 信息
+#    - 检查行为模拟是否真正启用
+#    - 尝试不同的强度级别
+#    - 考虑增加额外的反检测措施
