@@ -1,22 +1,25 @@
 """
-认证方式枚举定义
+认证方式枚举定义（主分支稳定版）
 """
 
 from enum import Enum
 
 
 class AuthMethod(str, Enum):
-    """认证方式枚举（继承str以支持JSON序列化）"""
+    """认证方式枚举（继承str以支持JSON序列化）
+
+    主分支仅支持稳定可靠的认证方式：
+    - COOKIES: Cookie 认证（最快速、最稳定）
+    - EMAIL: 邮箱密码认证（自动获取 Cookie）
+    """
 
     COOKIES = "cookies"
     EMAIL = "email"
-    GITHUB = "github"
-    LINUX_DO = "linux.do"
 
     @property
     def requires_human_verification(self) -> bool:
         """是否需要人机验证"""
-        return self in (AuthMethod.GITHUB, AuthMethod.LINUX_DO)
+        return False  # 主分支的认证方式都不需要人机验证
 
     @property
     def display_name(self) -> str:
@@ -24,8 +27,6 @@ class AuthMethod(str, Enum):
         display_names = {
             AuthMethod.COOKIES: "Cookies",
             AuthMethod.EMAIL: "Email/Password",
-            AuthMethod.GITHUB: "GitHub OAuth",
-            AuthMethod.LINUX_DO: "Linux.do OAuth"
         }
         return display_names.get(self, self.value)
 
