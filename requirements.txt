@@ -11,8 +11,9 @@ cloudscraper>=1.2.71
 # 注意：curl-cffi 可能需要编译依赖，安装失败不影响基础功能
 # Windows: 需要 Visual C++ Build Tools
 # Linux: 需要 libcurl-dev 和 python3-dev
-# 安装命令：pip install curl-cffi>=0.6.0
+# 安装命令：pip install curl-cffi>=0.6.0 --prefer-binary
 # 启用方式：设置环境变量 ENABLE_TLS_FINGERPRINT=true
+curl-cffi>=0.6.0
 
 # 测试依赖
 pytest>=7.4.0

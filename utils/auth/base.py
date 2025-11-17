@@ -59,10 +59,12 @@ class CloudscraperHelper:
                     browser={
                         'browser': 'chrome',
                         'platform': 'windows',
-                        'desktop': True
+                        'desktop': True,
+                        'mobile': False,
+                        'custom': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
                     },
-                    # 启用调试模式（可选）
-                    debug=False
+                    debug=False,  # 生产环境关闭调试
+                    delay=1  # 请求延迟（秒），避免触发速率限制
                 )
 
                 # 配置代理
@@ -474,9 +476,12 @@ class Authenticator(ABC):
         Returns:
             Dict[str, str]: cookies 字典
         """
+        logger.info("🛡️ 开始 WAF cookies 获取（三重降级策略）")
+        strategy_results = []  # 记录每种策略的结果
+
         # 方案 A：优先使用 Playwright（当前方案）
         try:
-            logger.info("ℹ️ 尝试使用 Playwright 获取 WAF cookies...")
+            logger.info("ℹ️ 策略 A：Playwright 获取 WAF cookies...")
 
             await page.goto(
                 self.provider_config.get_login_url(),
@@ -489,10 +494,14 @@ class Authenticator(ABC):
             waf_cookies = {cookie["name"]: cookie["value"] for cookie in cookies}
 
             if waf_cookies:
-                logger.info(f"✅ Playwright 获取成功: {len(waf_cookies)} 个 cookies")
+                logger.info(f"✅ Playwright 成功获取 {len(waf_cookies)} 个 cookies")
+                strategy_results.append(("Playwright", True, len(waf_cookies)))
                 return waf_cookies
 
+            strategy_results.append(("Playwright", False, 0))
+
         except Exception as e:
+            strategy_results.append(("Playwright", False, 0))
             logger.warning(f"⚠️ Playwright 获取 WAF cookies 失败: {e}")
 
         # 方案 B：尝试 TLS 指纹伪装（2025 新增，可选）
@@ -500,7 +509,7 @@ class Authenticator(ABC):
             from utils.tls_fingerprint import TLSFingerprintHelper
 
             if TLSFingerprintHelper.is_enabled() and TLSFingerprintHelper.is_available():
-                logger.info("🔐 降级使用 TLS 指纹伪装...")
+                logger.info("ℹ️ 策略 B：TLS 指纹伪装（curl-cffi）获取 WAF cookies...")
 
                 # 从环境变量获取代理配置（可选）
                 proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
@@ -511,7 +520,8 @@ class Authenticator(ABC):
                 )
 
                 if tls_cookies:
-                    logger.info(f"✅ TLS 指纹获取成功: {len(tls_cookies)} 个 cookies")
+                    logger.info(f"✅ TLS 指纹成功获取 {len(tls_cookies)} 个 cookies")
+                    strategy_results.append(("TLS Fingerprint", True, len(tls_cookies)))
 
                     # 将 TLS 指纹获取的 cookies 注入到 Playwright context
                     domain = self._get_domain(self.provider_config.get_login_url())
@@ -528,14 +538,18 @@ class Authenticator(ABC):
 
                     return tls_cookies
 
+                strategy_results.append(("TLS Fingerprint", False, 0))
+
         except ImportError:
+            strategy_results.append(("TLS Fingerprint", False, 0))
             logger.debug("ℹ️ TLS 指纹模块未导入（可选功能）")
         except Exception as e:
-            logger.debug(f"⚠️ TLS 指纹也失败: {e}")
+            strategy_results.append(("TLS Fingerprint", False, 0))
+            logger.debug(f"⚠️ TLS 指纹获取失败: {e}")
 
         # 方案 C：降级到 cloudscraper（仅在启用且前两种方案失败时）
         if use_cloudscraper:
-            logger.info("ℹ️ 降级使用 cloudscraper...")
+            logger.info("ℹ️ 策略 C：Cloudscraper 降级方案获取 WAF cookies...")
 
             try:
                 # 从环境变量获取代理配置（可选）
@@ -547,7 +561,8 @@ class Authenticator(ABC):
                 )
 
                 if cf_cookies:
-                    logger.info(f"✅ Cloudscraper 获取成功: {len(cf_cookies)} 个 cookies")
+                    logger.info(f"✅ Cloudscraper 成功获取 {len(cf_cookies)} 个 cookies")
+                    strategy_results.append(("Cloudscraper", True, len(cf_cookies)))
 
                     # 将 cloudscraper 获取的 cookies 注入到 Playwright context
                     domain = self._get_domain(self.provider_config.get_login_url())
@@ -564,11 +579,15 @@ class Authenticator(ABC):
 
                     return cf_cookies
 
+                strategy_results.append(("Cloudscraper", False, 0))
+
             except Exception as e:
-                logger.warning(f"⚠️ Cloudscraper 也失败: {e}")
+                strategy_results.append(("Cloudscraper", False, 0))
+                logger.warning(f"⚠️ Cloudscraper 获取失败: {e}")
 
         # 方案 D：如果都失败，返回空字典（不阻塞后续流程）
-        logger.warning("⚠️ 所有 WAF cookies 获取方案均失败，使用空 cookies 继续")
+        logger.warning(f"⚠️ 所有 WAF cookies 获取方案均失败")
+        logger.warning(f"📊 降级策略结果: {strategy_results}")
         return {}
 
     async def _init_page_and_check_cloudflare(self, page: Page) -> bool:
