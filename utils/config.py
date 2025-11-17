@@ -89,24 +89,6 @@ class AccountConfig:
                 password=email_config.get("password")
             ))
 
-        # GitHub 认证
-        if "github" in data:
-            github_config = data["github"]
-            auth_configs.append(AuthConfig(
-                method=AuthMethod.GITHUB,
-                username=github_config.get("username"),
-                password=github_config.get("password")
-            ))
-
-        # Linux.do 认证
-        if "linux.do" in data:
-            linux_config = data["linux.do"]
-            auth_configs.append(AuthConfig(
-                method=AuthMethod.LINUX_DO,
-                username=linux_config.get("username"),
-                password=linux_config.get("password")
-            ))
-
         return cls(name=name, provider=provider, auth_configs=auth_configs)
 
     def get_display_name(self, index: int) -> str:
@@ -318,7 +300,7 @@ def validate_account(account: AccountConfig, index: int) -> bool:
             if not auth.api_user:
                 logger.info(f"ℹ️  Account {index + 1} ({account.name}): api_user 未配置，将从认证后自动获取")
 
-        elif auth.method in (AuthMethod.EMAIL, AuthMethod.GITHUB, AuthMethod.LINUX_DO):
+        elif auth.method == AuthMethod.EMAIL:
             if not auth.username or not auth.password:
                 logger.error(f"❌ Account {index + 1} ({account.name}): {auth.method.value} auth requires username and password")
                 return False

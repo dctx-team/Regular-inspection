@@ -57,12 +57,6 @@ def _validate_auth_config(auth: AuthConfig, auth_index: int) -> List[str]:
         if not auth.password:
             errors.append(f"{prefix}: 邮箱认证缺少密码")
 
-    elif auth.method in ["github", "linux.do"]:
-        if not auth.username:
-            errors.append(f"{prefix}: {auth.method} 认证缺少用户名")
-        if not auth.password:
-            errors.append(f"{prefix}: {auth.method} 认证缺少密码")
-
     else:
         errors.append(f"{prefix}: 未知的认证方式 '{auth.method}'")
 
@@ -135,21 +129,6 @@ def validate_environment_variables() -> Dict[str, Any]:
     else:
         result["warnings"].append("未配置任何通知方式")
 
-    # 检查 2FA 相关环境变量
-    two_fa_vars = [
-        ("GITHUB_2FA_CODE", "GitHub 2FA 代码"),
-        ("GITHUB_TOTP_SECRET", "GitHub TOTP 密钥"),
-        ("GITHUB_RECOVERY_CODES", "GitHub 恢复代码")
-    ]
-
-    two_fa_configured = []
-    for env_var, desc in two_fa_vars:
-        if os.getenv(env_var):
-            two_fa_configured.append(desc)
-
-    if two_fa_configured:
-        result["two_fa"] = two_fa_configured
-
     return result
 
 
@@ -172,11 +151,6 @@ def print_validation_summary(result: Dict[str, Any]):
         print(f"\n🔔 通知配置: {len(result['notifications'])} 种")
         for notification in result["notifications"]:
             print(f"   - {notification}")
-
-    if result.get("two_fa"):
-        print(f"\n🔐 2FA 配置: {len(result['two_fa'])} 种")
-        for fa_config in result["two_fa"]:
-            print(f"   - {fa_config}")
 
     if result["warnings"]:
         print(f"\n⚠️ 警告 ({len(result['warnings'])} 个):")
