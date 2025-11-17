@@ -33,7 +33,22 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
+
+          # 安装系统依赖（curl-cffi 需要）
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev build-essential
+
+          # 安装 Python 依赖
           pip install -r requirements.txt
+
+          # 尝试安装 curl-cffi（TLS 指纹伪装）
+          echo "📦 尝试安装 curl-cffi（TLS 指纹伪装）..."
+          if pip install curl-cffi>=0.6.0 --prefer-binary; then
+            echo "✅ curl-cffi 安装成功"
+            python -c "from curl_cffi import requests; print('✅ curl-cffi 验证成功')" || echo "⚠️ curl-cffi 导入失败"
+          else
+            echo "⚠️ curl-cffi 安装失败，将使用降级方案"
+          fi
 
       - name: 获取 Playwright 版本
         id: playwright-version
@@ -156,6 +171,12 @@ jobs:
           # CI 环境优化
           CI_DISABLED_AUTH_METHODS: ${{ secrets.CI_DISABLED_AUTH_METHODS }}
           SESSION_CACHE_KEY: ${{ secrets.SESSION_CACHE_KEY }}
+
+          # Cloudflare 绕过配置（2025 增强版）
+          ENABLE_TLS_FINGERPRINT: true
+          TLS_BROWSER_TYPE: chrome131
+          CI_TIMEOUT_MULTIPLIER: 3.0
+          BEHAVIOR_SIMULATION_METHODS: github,linux.do
         run: |
           python main.py
 
