@@ -106,7 +106,7 @@ class CloudscraperHelper:
 
                 # 检查响应状态
                 if response.status_code != 200:
-                    logger.debug(f"⚠️ Cloudscraper 返回状态码 {response.status_code}")
+                    logger.warning(f"⚠️ Cloudscraper 返回状态码 {response.status_code}")
                     return {}
 
                 # 提取 cookies
@@ -118,16 +118,28 @@ class CloudscraperHelper:
                 if found_cf:
                     logger.info(f"✅ Cloudscraper 成功获取 Cloudflare cookies: {', '.join(found_cf)}")
                 else:
-                    logger.debug(f"⚠️ Cloudscraper 未获取到 Cloudflare 关键 cookies")
+                    logger.info(f"ℹ️ Cloudscraper 未获取到 Cloudflare 关键 cookies（可能获取到其他 cookies）")
+
+                # 诊断：显示所有获取到的 cookies
+                if cookies:
+                    logger.info(f"📋 Cloudscraper 获取到 {len(cookies)} 个 cookies: {list(cookies.keys())}")
+                else:
+                    logger.warning(f"⚠️ Cloudscraper 未获取到任何 cookies")
 
                 return cookies
 
-            except ImportError:
-                logger.debug("⚠️ cloudscraper 未安装，跳过此降级方案")
-                logger.debug("   提示：运行 'pip install cloudscraper' 安装")
+            except ImportError as ie:
+                logger.error(f"❌ cloudscraper 未安装！")
+                logger.error(f"   错误详情: {type(ie).__name__}: {str(ie)}")
+                logger.error(f"   解决方案: 运行 'pip install cloudscraper' 安装")
                 return {}
             except Exception as e:
-                logger.debug(f"⚠️ Cloudscraper 获取失败: {e}")
+                logger.error(f"❌ Cloudscraper 获取失败！")
+                logger.error(f"   错误类型: {type(e).__name__}")
+                logger.error(f"   错误详情: {str(e)}")
+                # 输出更详细的异常信息
+                import traceback
+                logger.error(f"   堆栈信息: {traceback.format_exc()}")
                 return {}
 
         # 在线程池中运行同步代码
@@ -136,7 +148,11 @@ class CloudscraperHelper:
             cookies = await loop.run_in_executor(None, _sync_get_cookies)
             return cookies
         except Exception as e:
-            logger.debug(f"⚠️ Cloudscraper 执行异常: {e}")
+            logger.error(f"❌ Cloudscraper 线程池执行异常！")
+            logger.error(f"   错误类型: {type(e).__name__}")
+            logger.error(f"   错误详情: {str(e)}")
+            import traceback
+            logger.error(f"   堆栈信息: {traceback.format_exc()}")
             return {}
 
 
