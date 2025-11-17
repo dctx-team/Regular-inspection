@@ -192,8 +192,7 @@ class EmailAuthenticator(Authenticator):
             # 检查是否只有 WAF cookies（这是 WAF 拦截的典型特征）
             non_waf_cookies = [name for name in cookies_dict.keys() if name not in waf_only_cookies]
             if len(non_waf_cookies) == 0:
-                logger.error(f"❌ [{self.auth_config.username}] 只有 WAF cookies，疑似被阿里云 WAF 拦截")
-                return False, "Login blocked by WAF - only WAF cookies obtained, no session cookies"
+                logger.warning(f"⚠️ [{self.auth_config.username}] 只有 WAF cookies，疑似被阿里云 WAF 拦截（将尝试 cloudscraper 降级）")
             elif len(non_waf_cookies) < 3:
                 logger.warning(f"⚠️ [{self.auth_config.username}] 非 WAF cookies 很少 ({non_waf_cookies})，可能被 WAF 部分拦截")
         else:
@@ -211,15 +210,11 @@ class EmailAuthenticator(Authenticator):
 
                 # 如果同时没有 session cookies 和 localStorage 用户数据，很可能是 WAF 拦截
                 if not has_session_cookies:
-                    logger.error(f"❌ [{self.auth_config.username}] 登录失败：无 session cookies 且 localStorage 为空")
-                    return False, "Login blocked by WAF - no session cookies and empty localStorage"
+                    logger.warning(f"⚠️ [{self.auth_config.username}] 无 session cookies 且 localStorage 为空（将尝试 cloudscraper 降级）")
         except Exception as e:
             logger.warning(f"⚠️ [{self.auth_config.username}] localStorage 检查失败: {e}")
 
         # 综合判断
-        if login_in_url:
-            return False, "Login failed - still on login page (may need captcha)"
-
         # 如果 UI 指标正常（URL变化或用户元素）且有真实 cookies，则认为成功
         if (not login_in_url or user_elements_found or page_title_indicates_success):
             if has_session_cookies or len(cookies_dict) > 5:  # 有 session cookies 或 cookies 数量足够多
@@ -288,6 +283,10 @@ class EmailAuthenticator(Authenticator):
 
                 # 如果 cloudscraper 降级也失败，返回 WAF 拦截错误
                 return False, "Login may be blocked by WAF - insufficient cookies (cloudscraper failed)"
+
+        # 如果 UI 指标也不正常（没有用户元素且仍在登录页），直接返回失败
+        if login_in_url and not user_elements_found:
+            return False, "Login failed - still on login page and no user elements found"
 
         return True, None
 
