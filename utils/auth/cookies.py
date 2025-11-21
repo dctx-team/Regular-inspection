@@ -16,6 +16,7 @@ class CookiesAuthenticator(Authenticator):
     async def _validate_cookies_with_precheck(
         self,
         page: Page,
+        context: BrowserContext,
         cookies_dict: Dict[str, str]
     ) -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
         """
@@ -212,7 +213,13 @@ class CookiesAuthenticator(Authenticator):
 
             # 步骤5: API 失败，尝试从页面提取用户信息（作为最后的后备方案）
             logger.info(f"🔍 [{self.account_name}] 步骤3: 从页面提取用户信息作为后备方案...")
-            user_id, username = await self._extract_user_from_page(page)
+
+            # 先尝试从 localStorage 提取（更可靠）
+            user_id, username = await self._extract_user_from_localstorage(page)
+
+            if not (user_id or username):
+                # localStorage 失败，尝试从页面 URL/元素提取
+                user_id, username = await self._extract_user_from_page(page)
 
             if user_id or username:
                 logger.info(
@@ -222,15 +229,34 @@ class CookiesAuthenticator(Authenticator):
                 return True, user_id, username, None
 
             # 步骤6: 如果完全无法验证，但页面不在登录页，则给予宽容判定
+            # 但要确保至少有一个标识（不能完全为 None）
             if '/login' not in current_url.lower():
                 logger.warning(
                     f"⚠️ [{self.account_name}] 无法通过 API 或页面提取验证用户信息，"
                     f"但当前不在登录页（{current_url}），给予宽容判定"
                 )
-                # 尝试使用账号名作为用户标识
-                fallback_username = self.account_name
-                logger.info(f"ℹ️ [{self.account_name}] 使用账号名作为后备标识: {fallback_username}")
-                return True, None, fallback_username, None
+
+                # 尝试从 cookies 中提取可能的用户标识
+                fallback_id = None
+                for cookie in await context.cookies():
+                    # 尝试从 cookie 名称中找到可能的用户 ID
+                    if 'user' in cookie['name'].lower() or 'id' in cookie['name'].lower():
+                        try:
+                            # 如果 cookie 值是数字，可能是用户 ID
+                            potential_id = str(cookie['value'])
+                            if potential_id.isdigit():
+                                fallback_id = potential_id
+                                logger.info(f"ℹ️ [{self.account_name}] 从 cookie '{cookie['name']}' 提取到可能的用户ID: {fallback_id}")
+                                break
+                        except:
+                            pass
+
+                # 如果没有从 cookie 提取到 ID，使用账号名
+                if not fallback_id:
+                    fallback_id = self.account_name
+                    logger.info(f"ℹ️ [{self.account_name}] 使用账号名作为后备标识: {fallback_id}")
+
+                return True, fallback_id, None, None
 
             # 完全无法验证
             logger.error(f"❌ [{self.account_name}] 无法通过任何方式验证 Cookies，且页面在登录页")
@@ -364,7 +390,7 @@ class CookiesAuthenticator(Authenticator):
             # 🔥 核心改进：使用预检机制验证 Cookies
             logger.info(f"🔍 [{self.account_name}] 开始 Cookies 有效性预检...")
             is_valid, user_id, username, error_msg = await self._validate_cookies_with_precheck(
-                page, cookies_dict
+                page, context, cookies_dict
             )
 
             if is_valid:
