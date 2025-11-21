@@ -112,100 +112,109 @@ class CookiesAuthenticator(Authenticator):
                 else:
                     logger.info(f"ℹ️ [{self.account_name}] URL 包含 login 但未检测到登录表单，可能是其他页面")
 
-            # 步骤4: 尝试 API 请求验证（优化后的逻辑）
-            logger.info(f"🔍 [{self.account_name}] 步骤2: 通过 API 验证 Cookies...")
+            # 步骤4: 尝试在浏览器中通过 API 验证 Cookies（使用 fetch，自动携带 cookies）
+            logger.info(f"🔍 [{self.account_name}] 步骤2: 通过浏览器 API 验证 Cookies...")
 
             api_validation_success = False
             api_user_id = None
             api_username = None
 
             try:
-                import httpx
-                from utils.constants import DEFAULT_USER_AGENT
+                # 使用浏览器的 fetch API 来验证（自动携带 cookies）
+                user_info_url = self.provider_config.get_user_info_url()
 
-                headers = {
-                    "User-Agent": DEFAULT_USER_AGENT,
-                    "Accept": "application/json",
-                    "Referer": self.provider_config.base_url
-                }
+                result = await page.evaluate("""
+                    async (url) => {
+                        try {
+                            const response = await fetch(url, {
+                                method: 'GET',
+                                headers: {
+                                    'Accept': 'application/json',
+                                    'X-Requested-With': 'XMLHttpRequest'
+                                },
+                                credentials: 'include'
+                            });
 
-                async with httpx.AsyncClient(
-                    cookies=cookies_dict,
-                    timeout=15.0,
-                    verify=True,
-                    follow_redirects=False  # 不自动跟随重定向
-                ) as client:
-                    response = await client.get(
-                        self.provider_config.get_user_info_url(),
-                        headers=headers
-                    )
+                            const contentType = response.headers.get('content-type');
+                            let data;
 
-                    logger.info(f"📊 [{self.account_name}] API 响应状态: {response.status_code}")
+                            if (contentType && contentType.includes('application/json')) {
+                                data = await response.json();
+                            } else {
+                                data = await response.text();
+                            }
 
-                    # 检查状态码
-                    if response.status_code == 401:
-                        logger.warning(f"⚠️ [{self.account_name}] API 返回 401，Cookies 可能已失效")
-                        # 不立即返回失败，继续尝试从页面提取
-                    elif response.status_code in [301, 302, 303, 307, 308]:
-                        location = response.headers.get('location', '')
-                        if 'login' in location.lower():
-                            logger.warning(f"⚠️ [{self.account_name}] API 重定向到登录页，Cookies 可能已失效")
-                        else:
-                            logger.info(f"ℹ️ [{self.account_name}] API 重定向到: {location}")
-                    elif response.status_code == 200:
-                        # 检查响应内容类型
-                        content_type = response.headers.get('content-type', '').lower()
+                            return {
+                                status: response.status,
+                                ok: response.ok,
+                                contentType: contentType,
+                                data: data
+                            };
+                        } catch (error) {
+                            return {
+                                status: 0,
+                                ok: false,
+                                error: error.message
+                            };
+                        }
+                    }
+                """, user_info_url)
 
+                logger.info(f"📊 [{self.account_name}] 浏览器 API 响应状态: {result.get('status')}")
+
+                if result.get('error'):
+                    logger.warning(f"⚠️ [{self.account_name}] 浏览器 API 请求失败: {result['error']}")
+                elif result.get('status') == 401:
+                    logger.warning(f"⚠️ [{self.account_name}] API 返回 401，Cookies 可能已失效")
+                elif result.get('ok'):
+                    data = result.get('data')
+                    content_type = result.get('contentType', '')
+
+                    # 如果返回的是字符串（可能是 JSON 字符串）
+                    if isinstance(data, str):
                         if 'application/json' in content_type:
+                            import json
                             try:
-                                data = response.json()
-
-                                if data.get("success") and data.get("data"):
-                                    user_data = data["data"]
-                                    api_user_id = (
-                                        user_data.get("id") or
-                                        user_data.get("user_id") or
-                                        user_data.get("userId")
-                                    )
-                                    api_username = (
-                                        user_data.get("username") or
-                                        user_data.get("name") or
-                                        user_data.get("email")
-                                    )
-
-                                    if api_user_id or api_username:
-                                        logger.info(
-                                            f"✅ [{self.account_name}] API 验证通过: "
-                                            f"ID={api_user_id}, 用户名={api_username}"
-                                        )
-                                        api_validation_success = True
-                                    else:
-                                        logger.warning(f"⚠️ [{self.account_name}] API 响应中未找到用户标识")
-                                elif not data.get("success"):
-                                    logger.warning(f"⚠️ [{self.account_name}] API 响应 success=false: {data.get('message', 'Unknown')}")
-                                else:
-                                    logger.warning(f"⚠️ [{self.account_name}] API 响应格式异常")
-
-                            except Exception as json_error:
-                                logger.warning(f"⚠️ [{self.account_name}] JSON 解析失败: {json_error}")
-
-                        elif 'text/html' in content_type:
-                            logger.warning(f"⚠️ [{self.account_name}] API 返回 HTML 而非 JSON")
-                            response_text = response.text[:500]
-
-                            if any(indicator in response_text.lower() for indicator in cf_indicators):
-                                logger.warning(f"⚠️ [{self.account_name}] API 可能被 Cloudflare 拦截")
-                            elif any(keyword in response_text.lower() for keyword in ['登录', 'login', 'sign in']):
-                                logger.warning(f"⚠️ [{self.account_name}] API 返回登录页面")
+                                data = json.loads(data)
+                            except:
+                                logger.warning(f"⚠️ [{self.account_name}] JSON 解析失败")
+                                data = None
                         else:
-                            logger.warning(f"⚠️ [{self.account_name}] API 返回未知内容类型: {content_type}")
-                    else:
-                        logger.warning(f"⚠️ [{self.account_name}] API 返回异常状态码: {response.status_code}")
+                            logger.warning(f"⚠️ [{self.account_name}] API 返回非 JSON 内容: {content_type}")
+                            data = None
 
-            except httpx.TimeoutException:
-                logger.warning(f"⚠️ [{self.account_name}] API 请求超时，尝试从页面提取")
+                    # 解析用户数据
+                    if isinstance(data, dict):
+                        if data.get("success") and data.get("data"):
+                            user_data = data["data"]
+                            api_user_id = (
+                                user_data.get("id") or
+                                user_data.get("user_id") or
+                                user_data.get("userId")
+                            )
+                            api_username = (
+                                user_data.get("username") or
+                                user_data.get("name") or
+                                user_data.get("email")
+                            )
+
+                            if api_user_id or api_username:
+                                logger.info(
+                                    f"✅ [{self.account_name}] 浏览器 API 验证通过: "
+                                    f"ID={api_user_id}, 用户名={api_username}"
+                                )
+                                api_validation_success = True
+                            else:
+                                logger.warning(f"⚠️ [{self.account_name}] API 响应中未找到用户标识")
+                        elif not data.get("success"):
+                            logger.warning(f"⚠️ [{self.account_name}] API 响应 success=false: {data.get('message', 'Unknown')}")
+                        else:
+                            logger.warning(f"⚠️ [{self.account_name}] API 响应格式异常")
+                else:
+                    logger.warning(f"⚠️ [{self.account_name}] API 返回异常状态码: {result.get('status')}")
+
             except Exception as api_error:
-                logger.warning(f"⚠️ [{self.account_name}] API 请求异常: {api_error}，尝试从页面提取")
+                logger.warning(f"⚠️ [{self.account_name}] 浏览器 API 请求异常: {api_error}")
 
             # 如果 API 验证成功，直接返回
             if api_validation_success:
