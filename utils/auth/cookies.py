@@ -123,14 +123,31 @@ class CookiesAuthenticator(Authenticator):
                 # 使用浏览器的 fetch API 来验证（自动携带 cookies）
                 user_info_url = self.provider_config.get_user_info_url()
 
+                # 获取 api_user（从配置或推断）
+                api_user = self.auth_config.api_user
+                if not api_user:
+                    # 尝试从账号名推断
+                    import re
+                    numbers = re.findall(r'\d+', self.account_name)
+                    api_user = numbers[0] if numbers else self.account_name
+
+                logger.info(f"🔑 [{self.account_name}] 使用 API User: {api_user}")
+
+                # 构建请求参数
+                fetch_params = {
+                    "url": user_info_url,
+                    "apiUser": str(api_user)
+                }
+
                 result = await page.evaluate("""
-                    async (url) => {
+                    async ({url, apiUser}) => {
                         try {
                             const response = await fetch(url, {
                                 method: 'GET',
                                 headers: {
                                     'Accept': 'application/json',
-                                    'X-Requested-With': 'XMLHttpRequest'
+                                    'X-Requested-With': 'XMLHttpRequest',
+                                    'New-Api-User': apiUser
                                 },
                                 credentials: 'include'
                             });
@@ -158,7 +175,7 @@ class CookiesAuthenticator(Authenticator):
                             };
                         }
                     }
-                """, user_info_url)
+                """, fetch_params)
 
                 logger.info(f"📊 [{self.account_name}] 浏览器 API 响应状态: {result.get('status')}")
 
