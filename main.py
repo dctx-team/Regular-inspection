@@ -552,15 +552,12 @@ async def main():
 
                     # 检查是否有变化
                     recharge = account_info.get('recharge')
-                    used_change = account_info.get('used_change')
                     quota_change = account_info.get('quota_change')
 
-                    if recharge or used_change or quota_change:
+                    if recharge or quota_change:
                         change_parts = []
                         if recharge:
                             change_parts.append(f"增加+${abs(recharge):.2f}" if recharge > 0 else f"减少-${abs(recharge):.2f}")
-                        if used_change:
-                            change_parts.append(f"已用+${abs(used_change):.2f}" if used_change > 0 else f"已用-${abs(used_change):.2f}")
                         if quota_change:
                             change_parts.append(f"可用+${abs(quota_change):.2f}" if quota_change > 0 else f"可用-${abs(quota_change):.2f}")
                         notification_lines.append(f"{status} {platform} {name}")
@@ -598,12 +595,10 @@ async def main():
             if stats['total_quota'] > 0 or stats['total_used'] > 0:
                 notification_lines.append(f"💰 总余额: ${stats['total_quota']:.2f}, 总已用: ${stats['total_used']:.2f}")
 
-            if stats['total_recharge'] != 0 or stats['total_used_change'] != 0 or stats['total_quota_change'] != 0:
+            if stats['total_recharge'] != 0 or stats['total_quota_change'] != 0:
                 change_parts = []
                 if stats['total_recharge'] != 0:
                     change_parts.append(f"增加+${abs(stats['total_recharge']):.2f}" if stats['total_recharge'] > 0 else f"减少-${abs(stats['total_recharge']):.2f}")
-                if stats['total_used_change'] != 0:
-                    change_parts.append(f"已用+${abs(stats['total_used_change']):.2f}" if stats['total_used_change'] > 0 else f"已用-${abs(stats['total_used_change']):.2f}")
                 if stats['total_quota_change'] != 0:
                     change_parts.append(f"可用+${abs(stats['total_quota_change']):.2f}" if stats['total_quota_change'] > 0 else f"可用-${abs(stats['total_quota_change']):.2f}")
                 notification_lines.append(f"📈 本期变动: {', '.join(change_parts)}")
@@ -622,12 +617,10 @@ async def main():
             notification_lines.append(f"💰 总余额: ${total_quota:.2f}")
             notification_lines.append(f"📊 总已用: ${total_used:.2f}")
 
-        if total_recharge != 0 or total_used_change != 0 or total_quota_change != 0:
+        if total_recharge != 0 or total_quota_change != 0:
             change_parts = []
             if total_recharge != 0:
                 change_parts.append(f"增加+${abs(total_recharge):.2f}" if total_recharge > 0 else f"减少-${abs(total_recharge):.2f}")
-            if total_used_change != 0:
-                change_parts.append(f"已用+${abs(total_used_change):.2f}" if total_used_change > 0 else f"已用-${abs(total_used_change):.2f}")
             if total_quota_change != 0:
                 change_parts.append(f"可用+${abs(total_quota_change):.2f}" if total_quota_change > 0 else f"可用-${abs(total_quota_change):.2f}")
             notification_lines.append(f"📈 本期变动: {', '.join(change_parts)}")
