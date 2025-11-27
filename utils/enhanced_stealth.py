@@ -1058,6 +1058,7 @@ class ProxyManager:
 
         自动检测以下环境变量:
         - USE_PROXY=true (显式启用)
+        - USE_PROXY=false (显式禁用，优先级最高)
         - PROXY_SUBSCRIPTION_URL (订阅代理模式)
         - PROXY_SERVER (直接代理模式)
 
@@ -1066,15 +1067,21 @@ class ProxyManager:
         """
         import os
 
-        # 方式1: 显式启用
-        if os.getenv('USE_PROXY', 'false').lower() == 'true':
+        use_proxy_env = os.getenv('USE_PROXY', '').lower()
+
+        # 方式1: 显式禁用（最高优先级）
+        if use_proxy_env == 'false':
+            return False
+
+        # 方式2: 显式启用
+        if use_proxy_env == 'true':
             return True
 
-        # 方式2: 配置了订阅代理URL
+        # 方式3: 配置了订阅代理URL（自动启用）
         if os.getenv('PROXY_SUBSCRIPTION_URL'):
             return True
 
-        # 方式3: 配置了直接代理服务器
+        # 方式4: 配置了直接代理服务器（自动启用）
         if os.getenv('PROXY_SERVER'):
             return True
 
@@ -1146,33 +1153,39 @@ class StealthConfig:
             bool: 是否使用代理
 
         环境变量配置：
+            - USE_PROXY=false                     # 全局禁用代理（最高优先级）
             - USE_PROXY=true                      # 全局启用代理
             - PROXY_METHODS=github,linux.do       # 仅对指定方式启用代理
             - NO_PROXY_METHODS=cookies            # 对指定方式禁用代理
         """
         import os
 
-        # 全局配置
-        global_proxy = os.getenv('USE_PROXY', 'false').lower() == 'true'
+        use_proxy_env = os.getenv('USE_PROXY', '').lower()
 
+        # 优先级1: 显式全局禁用（最高优先级）
+        if use_proxy_env == 'false':
+            return False
+
+        # 如果没有指定认证方式，使用全局配置
         if not auth_method:
-            return global_proxy
+            return ProxyManager.should_use_proxy()
 
-        # 检查是否仅对特定方式启用代理
+        # 优先级2: 检查是否仅对特定方式启用代理（白名单）
         proxy_methods = os.getenv('PROXY_METHODS', '').lower().split(',')
         proxy_methods = [m.strip() for m in proxy_methods if m.strip()]
 
         if proxy_methods:
             return auth_method.lower() in proxy_methods
 
-        # 检查是否对特定方式禁用代理
+        # 优先级3: 检查是否对特定方式禁用代理（黑名单）
         no_proxy_methods = os.getenv('NO_PROXY_METHODS', '').lower().split(',')
         no_proxy_methods = [m.strip() for m in no_proxy_methods if m.strip()]
 
         if no_proxy_methods and auth_method.lower() in no_proxy_methods:
             return False
 
-        return global_proxy
+        # 优先级4: 使用全局配置
+        return ProxyManager.should_use_proxy()
 
     @staticmethod
     def get_wait_time_multiplier(auth_method: str = None) -> float:

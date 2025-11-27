@@ -412,6 +412,13 @@ PROVIDERS='{
 
 **代理功能完全可选**：不配置代理相关的环境变量，脚本将正常运行不使用代理。
 
+**⚠️ 重要提示 - 代理优先级规则**：
+- `USE_PROXY=false` 拥有**最高优先级**，设置后将**强制禁用所有代理**
+  - 即使配置了 `PROXY_SERVER` 或 `PROXY_SUBSCRIPTION_URL` 也不会使用
+  - 适用于临时禁用代理或在 CI 环境中明确不使用代理
+- `USE_PROXY=true` 强制启用代理（需要配合 `PROXY_SERVER` 或 `PROXY_SUBSCRIPTION_URL`）
+- 如果未设置 `USE_PROXY`，代理会在检测到 `PROXY_SERVER` 或 `PROXY_SUBSCRIPTION_URL` 时**自动启用**
+
 支持三种代理配置方式：
 
 #### 方式 1：订阅代理（推荐）
