@@ -146,8 +146,9 @@ jobs:
           SERVERPUSHKEY: ${{ secrets.SERVERPUSHKEY }}
 
           # 代理配置（使用本地 Clash 提供的 HTTP 代理）
+          # 仅当配置了代理订阅时才启用代理
           USE_PROXY: ${{ secrets.PROXY_SUBSCRIPTION_URL != '' }}
-          PROXY_SERVER: http://127.0.0.1:7890
+          PROXY_SERVER: ${{ secrets.PROXY_SUBSCRIPTION_URL != '' && 'http://127.0.0.1:7890' || '' }}
 
           # 代理细粒度控制（可选）
           PROXY_METHODS: ${{ secrets.PROXY_METHODS }}
