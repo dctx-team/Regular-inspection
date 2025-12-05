@@ -287,6 +287,18 @@ async def main():
 
     logger.info(f"\n✅ 共 {len(valid_accounts)} 个账号通过验证\n")
 
+    # 预检测代理可用性
+    from utils.enhanced_stealth import ProxyManager
+    if ProxyManager.should_use_proxy():
+        logger.info("🔍 检测代理配置...")
+        proxy_config = await ProxyManager.get_verified_proxy_config()
+        if proxy_config:
+            logger.info(f"✅ 代理可用: {proxy_config['server']}")
+        else:
+            logger.warning("⚠️ 代理不可用或未配置，将直接连接目标网站")
+    else:
+        logger.info("ℹ️ 代理未启用")
+
     # 加载余额hash
     last_balance_hash = load_balance_hash()
 
