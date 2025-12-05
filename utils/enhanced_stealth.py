@@ -1093,6 +1093,108 @@ class ProxyManager:
         ProxyManager._subscription_manager = None
         logger.info("🔄 订阅管理器缓存已清除")
 
+    # 类级别的代理可用性缓存
+    _proxy_available: Optional[bool] = None
+    _proxy_tested: bool = False
+
+    @staticmethod
+    async def test_proxy_connectivity(proxy_config: dict, timeout: int = 10) -> bool:
+        """
+        测试代理连接是否可用
+
+        Args:
+            proxy_config: 代理配置字典 {"server": "...", "username": "...", "password": "..."}
+            timeout: 超时时间（秒）
+
+        Returns:
+            bool: 代理是否可用
+        """
+        import httpx
+
+        if not proxy_config or not proxy_config.get('server'):
+            return False
+
+        proxy_url = proxy_config['server']
+
+        # 构建带认证的代理 URL
+        if proxy_config.get('username') and proxy_config.get('password'):
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(proxy_url)
+            proxy_url = urlunparse((
+                parsed.scheme,
+                f"{proxy_config['username']}:{proxy_config['password']}@{parsed.netloc}",
+                parsed.path, parsed.params, parsed.query, parsed.fragment
+            ))
+
+        test_urls = [
+            "http://www.gstatic.com/generate_204",  # Google 连接测试
+            "http://cp.cloudflare.com",             # Cloudflare 连接测试
+            "http://www.msftconnecttest.com/connecttest.txt",  # Microsoft 连接测试
+        ]
+
+        for test_url in test_urls:
+            try:
+                async with httpx.AsyncClient(
+                    proxies={"http://": proxy_url, "https://": proxy_url},
+                    timeout=timeout,
+                    follow_redirects=True
+                ) as client:
+                    response = await client.get(test_url)
+                    if response.status_code in [200, 204]:
+                        logger.info(f"✅ 代理连接测试成功: {proxy_config['server']} (via {test_url})")
+                        return True
+            except asyncio.TimeoutError:
+                logger.debug(f"⏱️ 代理测试超时: {test_url}")
+            except Exception as e:
+                logger.debug(f"⚠️ 代理测试失败 ({test_url}): {type(e).__name__}")
+
+        logger.warning(f"❌ 代理不可用: {proxy_config['server']} (所有测试 URL 均失败)")
+        return False
+
+    @staticmethod
+    async def get_verified_proxy_config() -> Optional[dict]:
+        """
+        获取经过验证的代理配置
+
+        如果代理不可用，返回 None 并自动禁用代理
+
+        Returns:
+            dict or None: 验证过的代理配置，或 None（代理不可用）
+        """
+        # 检查是否应该使用代理
+        if not ProxyManager.should_use_proxy():
+            return None
+
+        # 如果已经测试过且不可用，直接返回 None
+        if ProxyManager._proxy_tested and not ProxyManager._proxy_available:
+            logger.info("ℹ️ 代理已确认不可用，跳过代理使用")
+            return None
+
+        # 获取代理配置
+        proxy_config = await ProxyManager.get_proxy_config_async()
+
+        if not proxy_config:
+            return None
+
+        # 如果尚未测试，进行可用性测试
+        if not ProxyManager._proxy_tested:
+            logger.info(f"🔍 测试代理可用性: {proxy_config['server']}")
+            ProxyManager._proxy_available = await ProxyManager.test_proxy_connectivity(proxy_config)
+            ProxyManager._proxy_tested = True
+
+            if not ProxyManager._proxy_available:
+                logger.warning("⚠️ 代理不可用，将不使用代理继续执行")
+                logger.info("💡 提示: 请检查代理配置或确保代理服务正在运行")
+                return None
+
+        return proxy_config
+
+    @staticmethod
+    def reset_proxy_test():
+        """重置代理测试状态（用于强制重新测试）"""
+        ProxyManager._proxy_tested = False
+        ProxyManager._proxy_available = None
+
 
 class StealthConfig:
     """反检测配置管理器 - 支持全局和按认证方式定制"""

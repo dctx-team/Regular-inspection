@@ -202,13 +202,10 @@ class CheckIn:
                     timeout_base = int(timeout_base * timeout_multiplier)
                     self.logger.info(f"ℹ️ [{self.account.name}] CI环境超时调整为 {timeout_base/1000}秒 (倍增器: {timeout_multiplier})")
 
-                # 获取代理配置（如果启用，支持订阅模式）
-                proxy_config = None
-                if ProxyManager.should_use_proxy():
-                    # 优先使用异步方法（支持订阅），回退到同步方法（直接配置）
-                    proxy_config = await ProxyManager.get_proxy_config_async()
-                    if proxy_config:
-                        self.logger.info(f"🌐 [{self.account.name}] 启用代理: {proxy_config['server']}")
+                # 获取代理配置（如果启用，支持订阅模式，自动验证可用性）
+                proxy_config = await ProxyManager.get_verified_proxy_config()
+                if proxy_config:
+                    self.logger.info(f"🌐 [{self.account.name}] 启用代理: {proxy_config['server']}")
 
                 # 使用增强的浏览器参数
                 browser_args = EnhancedStealth.get_enhanced_browser_args()
