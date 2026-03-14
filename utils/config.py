@@ -7,6 +7,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 from utils.logger import setup_logger
 from utils.auth_method import AuthMethod
 
@@ -16,6 +17,7 @@ logger = setup_logger(__name__)
 @dataclass
 class ProviderConfig:
     """Provider 配置数据类"""
+
     name: str
     base_url: str
     login_url: str
@@ -36,11 +38,11 @@ class ProviderConfig:
     def get_user_info_url(self) -> str:
         """获取用户信息URL"""
         return self.user_info_url
-    
+
     def get_status_url(self) -> str:
         """获取状态URL"""
         return self.status_url or f"{self.base_url}/api/user/status"
-    
+
     def get_auth_state_url(self) -> str:
         """获取认证状态URL"""
         return self.auth_state_url or f"{self.base_url}/api/user/auth_state"
@@ -49,6 +51,7 @@ class ProviderConfig:
 @dataclass
 class AuthConfig:
     """认证配置"""
+
     method: AuthMethod  # 认证方式枚举
     username: Optional[str] = None
     password: Optional[str] = None
@@ -59,6 +62,7 @@ class AuthConfig:
 @dataclass
 class AccountConfig:
     """账号配置数据类"""
+
     name: str
     provider: str
     auth_configs: List[AuthConfig] = field(default_factory=list)
@@ -74,20 +78,24 @@ class AccountConfig:
 
         # Cookies 认证
         if "cookies" in data and data["cookies"]:
-            auth_configs.append(AuthConfig(
-                method=AuthMethod.COOKIES,
-                cookies=data["cookies"],
-                api_user=data.get("api_user")
-            ))
+            auth_configs.append(
+                AuthConfig(
+                    method=AuthMethod.COOKIES,
+                    cookies=data["cookies"],
+                    api_user=data.get("api_user"),
+                )
+            )
 
         # Email 认证
         if "email" in data:
             email_config = data["email"]
-            auth_configs.append(AuthConfig(
-                method=AuthMethod.EMAIL,
-                username=email_config.get("username") or email_config.get("email"),
-                password=email_config.get("password")
-            ))
+            auth_configs.append(
+                AuthConfig(
+                    method=AuthMethod.EMAIL,
+                    username=email_config.get("username") or email_config.get("email"),
+                    password=email_config.get("password"),
+                )
+            )
 
         return cls(name=name, provider=provider, auth_configs=auth_configs)
 
@@ -99,6 +107,7 @@ class AccountConfig:
 @dataclass
 class AppConfig:
     """应用配置"""
+
     providers: Dict[str, ProviderConfig] = field(default_factory=dict)
 
     @classmethod
@@ -113,7 +122,7 @@ class AppConfig:
                 checkin_url="https://anyrouter.top/api/user/sign_in",
                 user_info_url="https://anyrouter.top/api/user/self",
                 status_url="https://anyrouter.top/api/status",
-                auth_state_url="https://anyrouter.top/api/oauth/state"
+                auth_state_url="https://anyrouter.top/api/oauth/state",
             ),
             "agentrouter": ProviderConfig(
                 name="AgentRouter",
@@ -123,8 +132,8 @@ class AppConfig:
                 checkin_url="https://agentrouter.org/api/user/sign_in",
                 user_info_url="https://agentrouter.org/api/user/self",
                 status_url="https://agentrouter.org/api/status",
-                auth_state_url="https://agentrouter.org/api/oauth/state"
-            )
+                auth_state_url="https://agentrouter.org/api/oauth/state",
+            ),
         }
 
         # 从环境变量加载自定义 Providers
@@ -138,7 +147,7 @@ class AppConfig:
                         base_url=config["base_url"],
                         login_url=config["login_url"],
                         checkin_url=config["checkin_url"],
-                        user_info_url=config["user_info_url"]
+                        user_info_url=config["user_info_url"],
                     )
             except Exception as e:
                 logger.warning(f"⚠️ Failed to load custom providers: {e}")
@@ -162,7 +171,9 @@ def load_accounts() -> Optional[List[AccountConfig]]:
             if isinstance(anyrouter_data, list):
                 for i, account_data in enumerate(anyrouter_data):
                     account_data["provider"] = "anyrouter"
-                    all_accounts.append(AccountConfig.from_dict(account_data, len(all_accounts)))
+                    all_accounts.append(
+                        AccountConfig.from_dict(account_data, len(all_accounts))
+                    )
         except Exception as e:
             logger.error(f"❌ Failed to load ANYROUTER_ACCOUNTS: {e}")
 
@@ -174,7 +185,9 @@ def load_accounts() -> Optional[List[AccountConfig]]:
             if isinstance(agentrouter_data, list):
                 for i, account_data in enumerate(agentrouter_data):
                     account_data["provider"] = "agentrouter"
-                    all_accounts.append(AccountConfig.from_dict(account_data, len(all_accounts)))
+                    all_accounts.append(
+                        AccountConfig.from_dict(account_data, len(all_accounts))
+                    )
         except Exception as e:
             logger.error(f"❌ Failed to load AGENTROUTER_ACCOUNTS: {e}")
 
@@ -185,14 +198,18 @@ def load_accounts() -> Optional[List[AccountConfig]]:
             accounts_data = json.loads(accounts_str)
             if isinstance(accounts_data, list):
                 for i, account_data in enumerate(accounts_data):
-                    all_accounts.append(AccountConfig.from_dict(account_data, len(all_accounts)))
+                    all_accounts.append(
+                        AccountConfig.from_dict(account_data, len(all_accounts))
+                    )
         except Exception as e:
             logger.error(f"❌ Failed to load ACCOUNTS: {e}")
 
     return all_accounts if all_accounts else None
 
 
-def validate_password_strength(password: str, account_name: str, index: int) -> tuple[bool, Optional[str]]:
+def validate_password_strength(
+    password: str, account_name: str, index: int
+) -> tuple[bool, Optional[str]]:
     """验证密码强度
 
     Args:
@@ -207,8 +224,10 @@ def validate_password_strength(password: str, account_name: str, index: int) -> 
         SKIP_PASSWORD_VALIDATION: 设置为 'true' 可跳过密码强度验证（不推荐，仅用于测试账号）
     """
     # 检查是否跳过密码验证
-    if os.getenv('SKIP_PASSWORD_VALIDATION', 'false').lower() == 'true':
-        logger.warning(f"⚠️ Account {index + 1} ({account_name}): 密码强度验证已跳过（SKIP_PASSWORD_VALIDATION=true）")
+    if os.getenv("SKIP_PASSWORD_VALIDATION", "false").lower() == "true":
+        logger.warning(
+            f"⚠️ Account {index + 1} ({account_name}): 密码强度验证已跳过（SKIP_PASSWORD_VALIDATION=true）"
+        )
         return True, None
 
     # 检查密码最小长度
@@ -217,18 +236,33 @@ def validate_password_strength(password: str, account_name: str, index: int) -> 
 
     # 检查是否为常见弱密码（严重安全风险，必须拒绝）
     common_weak_passwords = [
-        "123456", "password", "123456789", "12345678", "12345", "111111",
-        "qwerty", "abc123", "password123", "admin", "letmein", "welcome",
-        "monkey", "1234567890", "qwerty123", "123123", "000000", "654321"
+        "123456",
+        "password",
+        "123456789",
+        "12345678",
+        "12345",
+        "111111",
+        "qwerty",
+        "abc123",
+        "password123",
+        "admin",
+        "letmein",
+        "welcome",
+        "monkey",
+        "1234567890",
+        "qwerty123",
+        "123123",
+        "000000",
+        "654321",
     ]
 
     if password.lower() in common_weak_passwords:
         return False, f"密码过于简单（'{password}' 是常见弱密码，存在严重安全风险）"
 
     # 检查密码复杂度（建议但不强制）
-    has_uppercase = bool(re.search(r'[A-Z]', password))
-    has_lowercase = bool(re.search(r'[a-z]', password))
-    has_digit = bool(re.search(r'\d', password))
+    has_uppercase = bool(re.search(r"[A-Z]", password))
+    has_lowercase = bool(re.search(r"[a-z]", password))
+    has_digit = bool(re.search(r"\d", password))
     has_special = bool(re.search(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\;/`~]', password))
 
     complexity_count = sum([has_uppercase, has_lowercase, has_digit, has_special])
@@ -266,7 +300,10 @@ def validate_password_strength(password: str, account_name: str, index: int) -> 
 
     # 检查连续字符（如 "123456", "abcdef"）
     consecutive_patterns = [
-        "0123456789", "abcdefghijklmnopqrstuvwxyz", "qwertyuiop", "asdfghjkl"
+        "0123456789",
+        "abcdefghijklmnopqrstuvwxyz",
+        "qwertyuiop",
+        "asdfghjkl",
     ]
     for pattern in consecutive_patterns:
         if password.lower() in pattern and len(password) >= 5:
@@ -275,49 +312,164 @@ def validate_password_strength(password: str, account_name: str, index: int) -> 
     return True, None
 
 
+def validate_url_scheme(
+    url: str, field_name: str = "URL"
+) -> tuple[bool, Optional[str]]:
+    """验证 URL 使用 HTTPS 协议
+
+    Args:
+        url: 待验证的 URL
+        field_name: 字段名称（用于错误消息）
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not url:
+        return False, f"{field_name} 不能为空"
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("https", ""):
+        return False, f"{field_name} 必须使用 HTTPS 协议（当前: {parsed.scheme}://）"
+
+    if parsed.scheme == "" and not url.startswith("/"):
+        return False, f"{field_name} 格式无效"
+
+    return True, None
+
+
+def validate_cookie_value(name: str, value: str) -> tuple[bool, Optional[str]]:
+    """验证 cookie 值格式安全性
+
+    检查异常长度和注入字符。
+
+    Args:
+        name: cookie 名称
+        value: cookie 值
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not isinstance(value, str):
+        return False, f"Cookie '{name}' 值必须是字符串"
+
+    # 检查异常长度（正常 cookie 值不应超过 4096 字符）
+    if len(value) > 4096:
+        return False, f"Cookie '{name}' 值异常过长（{len(value)} 字符，上限 4096）"
+
+    # 检查注入字符（换行符可能导致 HTTP header 注入）
+    if "\r" in value or "\n" in value:
+        return False, f"Cookie '{name}' 包含非法换行符（可能的 header 注入攻击）"
+
+    # 检查 null 字节
+    if "\x00" in value:
+        return False, f"Cookie '{name}' 包含 null 字节"
+
+    return True, None
+
+
+def validate_account_name(name: str) -> tuple[bool, Optional[str]]:
+    """验证账号名称安全性（防止路径遍历）
+
+    Args:
+        name: 账号名称
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not name:
+        return True, None  # 空名称由其他验证处理
+
+    # 检查路径遍历字符
+    dangerous_patterns = ["..", "/", "\\", "\x00"]
+    for pattern in dangerous_patterns:
+        if pattern in name:
+            return False, f"账号名称包含不安全字符 '{pattern}'（可能的路径遍历攻击）"
+
+    # 检查名称长度
+    if len(name) > 128:
+        return False, f"账号名称过长（{len(name)} 字符，上限 128）"
+
+    return True, None
+
+
 def validate_account(account: AccountConfig, index: int) -> bool:
     """验证账号配置（增强版）"""
     if not account.auth_configs:
-        logger.error(f"❌ Account {index + 1} ({account.name}): No authentication method configured")
+        logger.error(
+            f"❌ Account {index + 1} ({account.name}): No authentication method configured"
+        )
+        return False
+
+    # 验证账号名称安全性
+    name_valid, name_error = validate_account_name(account.name)
+    if not name_valid:
+        logger.error(f"❌ Account {index + 1}: {name_error}")
         return False
 
     for auth in account.auth_configs:
         if auth.method == AuthMethod.COOKIES:
             if not auth.cookies:
-                logger.error(f"❌ Account {index + 1} ({account.name}): Cookies auth requires cookies")
+                logger.error(
+                    f"❌ Account {index + 1} ({account.name}): Cookies auth requires cookies"
+                )
                 return False
 
             # 添加详细的cookies验证
             if not isinstance(auth.cookies, dict):
-                logger.error(f"❌ Account {index + 1} ({account.name}): Cookies must be a dictionary")
+                logger.error(
+                    f"❌ Account {index + 1} ({account.name}): Cookies must be a dictionary"
+                )
                 return False
 
             if len(auth.cookies) == 0:
-                logger.error(f"❌ Account {index + 1} ({account.name}): Cookies dictionary cannot be empty")
+                logger.error(
+                    f"❌ Account {index + 1} ({account.name}): Cookies dictionary cannot be empty"
+                )
                 return False
+
+            # 验证每个 cookie 值的格式安全性
+            for cookie_name, cookie_value in auth.cookies.items():
+                cookie_valid, cookie_error = validate_cookie_value(
+                    cookie_name, cookie_value
+                )
+                if not cookie_valid:
+                    logger.error(
+                        f"❌ Account {index + 1} ({account.name}): {cookie_error}"
+                    )
+                    return False
 
             # api_user 现在是可选的，可以从认证后的用户信息API自动获取
             if not auth.api_user:
-                logger.info(f"ℹ️  Account {index + 1} ({account.name}): api_user 未配置，将从认证后自动获取")
+                logger.info(
+                    f"ℹ️  Account {index + 1} ({account.name}): api_user 未配置，将从认证后自动获取"
+                )
 
         elif auth.method == AuthMethod.EMAIL:
             if not auth.username or not auth.password:
-                logger.error(f"❌ Account {index + 1} ({account.name}): {auth.method.value} auth requires username and password")
+                logger.error(
+                    f"❌ Account {index + 1} ({account.name}): {auth.method.value} auth requires username and password"
+                )
                 return False
 
             # 添加用户名格式检查
             if not isinstance(auth.username, str) or len(auth.username.strip()) == 0:
-                logger.error(f"❌ Account {index + 1} ({account.name}): Username must be a non-empty string")
+                logger.error(
+                    f"❌ Account {index + 1} ({account.name}): Username must be a non-empty string"
+                )
                 return False
 
             # 使用增强的密码强度验证
-            is_valid, error_msg = validate_password_strength(auth.password, account.name, index)
+            is_valid, error_msg = validate_password_strength(
+                auth.password, account.name, index
+            )
             if not is_valid:
                 logger.error(f"❌ Account {index + 1} ({account.name}): {error_msg}")
                 return False
 
         else:
-            logger.error(f"❌ Account {index + 1} ({account.name}): Unknown auth method '{auth.method.value}'")
+            logger.error(
+                f"❌ Account {index + 1} ({account.name}): Unknown auth method '{auth.method.value}'"
+            )
             return False
 
     return True

@@ -45,6 +45,7 @@ class CloudscraperHelper:
         Returns:
             Dict[str, str]: cookies 字典
         """
+
         def _sync_get_cookies():
             """同步获取 cookies（在线程池中运行）"""
             try:
@@ -53,19 +54,16 @@ class CloudscraperHelper:
                 # 创建 scraper 实例
                 scraper = cloudscraper.create_scraper(
                     browser={
-                        'browser': 'chrome',
-                        'platform': 'windows',
-                        'desktop': True
+                        "browser": "chrome",
+                        "platform": "windows",
+                        "desktop": True,
                     }
                 )
 
                 # 配置代理
                 proxies = None
                 if proxy:
-                    proxies = {
-                        'http': proxy,
-                        'https': proxy
-                    }
+                    proxies = {"http": proxy, "https": proxy}
 
                 # 访问目标网站
                 response = scraper.get(url, proxies=proxies, timeout=30)
@@ -94,12 +92,42 @@ class CloudscraperHelper:
 class Authenticator(ABC):
     """认证器基类"""
 
-    def __init__(self, account_name: str, auth_config: AuthConfig, provider_config: ProviderConfig):
+    def __init__(
+        self,
+        account_name: str,
+        auth_config: AuthConfig,
+        provider_config: ProviderConfig,
+    ):
         self.account_name = account_name
         self.auth_config = auth_config
         self.provider_config = provider_config
         self.is_ci = CIConfig.is_ci_environment()
         self.enable_behavior_simulation = CIConfig.should_enable_behavior_simulation()
+
+        # 验证 provider URL 安全性
+        self._validate_url_security(provider_config.base_url, "base_url")
+
+    def _validate_url_security(self, url: str, field_name: str = "URL") -> None:
+        """验证目标 URL 安全性
+
+        确保目标 URL 使用 HTTPS 协议，防止中间人攻击。
+        非 HTTPS URL 仅记录警告（不阻塞流程，因为开发环境可能用 HTTP）。
+
+        Args:
+            url: 待验证的 URL
+            field_name: 字段名称（用于日志）
+        """
+        if not url:
+            return
+
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.scheme != "https":
+            logger.warning(
+                f"⚠️ [{self.account_name}] {field_name} 未使用 HTTPS 协议 "
+                f"({parsed.scheme}://{parsed.netloc})，通信可能不安全"
+            )
 
     @abstractmethod
     async def authenticate(self, page: Page, context: BrowserContext) -> Dict[str, Any]:
@@ -118,10 +146,7 @@ class Authenticator(ABC):
         pass
 
     async def _wait_for_cloudflare_challenge(
-        self,
-        page: Page,
-        max_wait_seconds: int = 60,
-        max_retries: int = 3
+        self, page: Page, max_wait_seconds: int = 60, max_retries: int = 3
     ) -> bool:
         """等待Cloudflare验证完成（优化版 - 支持重试机制）
 
@@ -141,17 +166,21 @@ class Authenticator(ABC):
 
             for retry in range(max_retries):
                 # 计算本次重试的等待时间（指数退避）
-                current_wait_time = max_wait_seconds * (1.5 ** retry)  # 60s, 90s, 135s
+                current_wait_time = max_wait_seconds * (1.5**retry)  # 60s, 90s, 135s
                 current_wait_time = min(current_wait_time, 180)  # 最多180秒
 
                 if retry > 0:
-                    logger.info(f"🔄 Cloudflare验证重试 {retry}/{max_retries-1}（等待时间: {int(current_wait_time)}秒）")
+                    logger.info(
+                        f"🔄 Cloudflare验证重试 {retry}/{max_retries-1}（等待时间: {int(current_wait_time)}秒）"
+                    )
 
                     # 重试策略1: 刷新页面
                     if retry == 1:
                         try:
                             logger.info(f"🔄 策略1: 刷新页面")
-                            await page.reload(wait_until="domcontentloaded", timeout=30000)
+                            await page.reload(
+                                wait_until="domcontentloaded", timeout=30000
+                            )
                             await page.wait_for_timeout(TimeoutConfig.LONG_WAIT_20)
                         except Exception as e:
                             logger.warning(f"⚠️ 刷新页面失败: {e}")
@@ -163,13 +192,15 @@ class Authenticator(ABC):
                             await page.goto(
                                 self.provider_config.get_login_url(),
                                 wait_until="domcontentloaded",
-                                timeout=30000
+                                timeout=30000,
                             )
                             await page.wait_for_timeout(TimeoutConfig.MEDIUM_WAIT_10)
                         except Exception as e:
                             logger.warning(f"⚠️ 重新访问失败: {e}")
                 else:
-                    logger.info(f"🛡️ 检测到可能的Cloudflare验证，等待完成（最多{int(current_wait_time)}秒）...")
+                    logger.info(
+                        f"🛡️ 检测到可能的Cloudflare验证，等待完成（最多{int(current_wait_time)}秒）..."
+                    )
 
                 # CI 环境下，在开始等待前添加行为模拟
                 if self.enable_behavior_simulation and retry == 0:
@@ -189,20 +220,32 @@ class Authenticator(ABC):
 
                     # 更智能的检测：检查页面内容而不仅仅是标题
                     page_content = await page.content()
-                    has_cloudflare_markers = any(marker in page_content.lower() for marker in [
-                        "just a moment",
-                        "checking your browser",
-                        "cloudflare",
-                        "ddos protection"
-                    ])
+                    has_cloudflare_markers = any(
+                        marker in page_content.lower()
+                        for marker in [
+                            "just a moment",
+                            "checking your browser",
+                            "cloudflare",
+                            "ddos protection",
+                        ]
+                    )
 
                     # 检查是否是Cloudflare验证页
-                    if has_cloudflare_markers and ("verification" in page_title.lower() or "checking" in page_title.lower()):
+                    if has_cloudflare_markers and (
+                        "verification" in page_title.lower()
+                        or "checking" in page_title.lower()
+                    ):
                         elapsed = int(asyncio.get_event_loop().time() - start_time)
-                        logger.info(f"   ⏳ Cloudflare验证中，继续等待... ({elapsed}s/{int(current_wait_time)}s)")
+                        logger.info(
+                            f"   ⏳ Cloudflare验证中，继续等待... ({elapsed}s/{int(current_wait_time)}s)"
+                        )
 
                         # 超过20秒后降低检测频率
-                        wait_time = TimeoutConfig.RETRY_WAIT_MEDIUM if elapsed > 20 else TimeoutConfig.RETRY_WAIT_SHORT
+                        wait_time = (
+                            TimeoutConfig.RETRY_WAIT_MEDIUM
+                            if elapsed > 20
+                            else TimeoutConfig.RETRY_WAIT_SHORT
+                        )
                         await page.wait_for_timeout(wait_time)
                         continue
 
@@ -219,7 +262,9 @@ class Authenticator(ABC):
                             'button:has-text("登录"), button:has-text("Login")'
                         )
                         if len(login_indicators) > 0:
-                            logger.info(f"✅ 检测到登录表单，验证已完成（第 {retry + 1} 次尝试）")
+                            logger.info(
+                                f"✅ 检测到登录表单，验证已完成（第 {retry + 1} 次尝试）"
+                            )
                             verification_passed = True
                             break
                     except:
@@ -254,10 +299,13 @@ class Authenticator(ABC):
     def _get_domain(self, url: str) -> str:
         """从 URL 提取域名"""
         from urllib.parse import urlparse
+
         parsed = urlparse(url)
         return parsed.netloc
 
-    async def _wait_for_session_cookies(self, context: BrowserContext, max_wait_seconds: int = 10) -> bool:
+    async def _wait_for_session_cookies(
+        self, context: BrowserContext, max_wait_seconds: int = 10
+    ) -> bool:
         """等待会话cookies出现"""
         try:
             logger.info(f"⏳ 等待会话cookies设置...")
@@ -282,24 +330,43 @@ class Authenticator(ABC):
             logger.warning(f"⚠️ 等待会话cookies异常: {e}")
             return False
 
-    async def _extract_user_info(self, page: Page, cookies: Dict[str, str]) -> Tuple[Optional[str], Optional[str]]:
+    async def _extract_user_info(
+        self, page: Page, cookies: Dict[str, str]
+    ) -> Tuple[Optional[str], Optional[str]]:
         """从用户信息API提取用户ID和用户名"""
         try:
             import httpx
+
             headers = {"User-Agent": DEFAULT_USER_AGENT, "Accept": "application/json"}
-            async with httpx.AsyncClient(cookies=cookies, timeout=10.0, verify=True) as client:
-                response = await client.get(self.provider_config.get_user_info_url(), headers=headers)
+            async with httpx.AsyncClient(
+                cookies=cookies, timeout=10.0, verify=True
+            ) as client:
+                response = await client.get(
+                    self.provider_config.get_user_info_url(), headers=headers
+                )
                 if response.status_code == 200:
                     data = response.json()
                     if data.get("success") and data.get("data"):
                         user_data = data["data"]
-                        user_id = user_data.get("id") or user_data.get("user_id") or user_data.get("userId")
-                        username = user_data.get("username") or user_data.get("name") or user_data.get("email")
+                        user_id = (
+                            user_data.get("id")
+                            or user_data.get("user_id")
+                            or user_data.get("userId")
+                        )
+                        username = (
+                            user_data.get("username")
+                            or user_data.get("name")
+                            or user_data.get("email")
+                        )
                         if user_id or username:
-                            logger.info(f"✅ 提取到用户标识: ID={user_id}, 用户名={username}")
+                            logger.info(
+                                f"✅ 提取到用户标识: ID={user_id}, 用户名={username}"
+                            )
                             return str(user_id) if user_id else None, username
                 else:
-                    logger.warning(f"⚠️ 用户信息API返回 {response.status_code}，尝试从页面提取")
+                    logger.warning(
+                        f"⚠️ 用户信息API返回 {response.status_code}，尝试从页面提取"
+                    )
                     # 当API返回401时，尝试从当前页面URL提取user_id
                     return await self._extract_user_from_page(page)
         except Exception as e:
@@ -307,14 +374,16 @@ class Authenticator(ABC):
             return await self._extract_user_from_page(page)
         return None, None
 
-    async def _extract_user_from_page(self, page: Page) -> Tuple[Optional[str], Optional[str]]:
+    async def _extract_user_from_page(
+        self, page: Page
+    ) -> Tuple[Optional[str], Optional[str]]:
         """从页面URL或内容提取用户标识"""
         try:
             current_url = page.url
             logger.info(f"🔍 尝试从页面提取用户信息: {current_url}")
 
             # 尝试从URL路径提取（如 /user/12345）
-            user_match = re.search(r'/user/(\w+)', current_url)
+            user_match = re.search(r"/user/(\w+)", current_url)
             if user_match:
                 user_id = user_match.group(1)
                 logger.info(f"✅ 从URL提取到用户ID: {user_id}")
@@ -323,9 +392,13 @@ class Authenticator(ABC):
             # 尝试查找页面中的用户信息
             try:
                 # 查找可能包含用户ID的元素
-                user_elements = await page.query_selector_all('[data-user-id], [data-userid], [id*="user"]')
+                user_elements = await page.query_selector_all(
+                    '[data-user-id], [data-userid], [id*="user"]'
+                )
                 for elem in user_elements[:5]:
-                    user_id = await elem.get_attribute('data-user-id') or await elem.get_attribute('data-userid')
+                    user_id = await elem.get_attribute(
+                        "data-user-id"
+                    ) or await elem.get_attribute("data-userid")
                     if user_id and user_id.isdigit():
                         logger.info(f"✅ 从页面元素提取到用户ID: {user_id}")
                         return user_id, None
@@ -338,7 +411,9 @@ class Authenticator(ABC):
 
         return None, None
 
-    async def _extract_user_from_localstorage(self, page: Page) -> Tuple[Optional[str], Optional[str]]:
+    async def _extract_user_from_localstorage(
+        self, page: Page
+    ) -> Tuple[Optional[str], Optional[str]]:
         """从localStorage提取用户标识"""
         try:
             logger.info(f"🔍 尝试从localStorage提取用户信息")
@@ -349,9 +424,14 @@ class Authenticator(ABC):
             user_data = await page.evaluate("() => localStorage.getItem('user')")
             if user_data:
                 import json
+
                 user_obj = json.loads(user_data)
                 user_id = user_obj.get("id")
-                username = user_obj.get("username") or user_obj.get("name") or user_obj.get("email")
+                username = (
+                    user_obj.get("username")
+                    or user_obj.get("name")
+                    or user_obj.get("email")
+                )
 
                 if user_id:
                     logger.info(f"✅ 从localStorage提取到用户ID: {user_id}")
@@ -365,7 +445,9 @@ class Authenticator(ABC):
 
         return None, None
 
-    async def _get_waf_cookies(self, page: Page, context: BrowserContext, use_cloudscraper: bool = True) -> Dict[str, str]:
+    async def _get_waf_cookies(
+        self, page: Page, context: BrowserContext, use_cloudscraper: bool = True
+    ) -> Dict[str, str]:
         """
         获取 WAF cookies - 支持 Playwright + cloudscraper 双重降级
 
@@ -386,7 +468,7 @@ class Authenticator(ABC):
             await page.goto(
                 self.provider_config.get_login_url(),
                 wait_until="domcontentloaded",
-                timeout=TimeoutConfig.PAGE_LOAD
+                timeout=TimeoutConfig.PAGE_LOAD,
             )
             await page.wait_for_timeout(TimeoutConfig.SHORT_WAIT_3)
 
@@ -409,23 +491,28 @@ class Authenticator(ABC):
                 proxy = os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
 
                 cf_cookies = await CloudscraperHelper.get_cf_cookies(
-                    self.provider_config.get_login_url(),
-                    proxy
+                    self.provider_config.get_login_url(), proxy
                 )
 
                 if cf_cookies:
-                    logger.info(f"✅ Cloudscraper 获取成功: {len(cf_cookies)} 个 cookies")
+                    logger.info(
+                        f"✅ Cloudscraper 获取成功: {len(cf_cookies)} 个 cookies"
+                    )
 
                     # 将 cloudscraper 获取的 cookies 注入到 Playwright context
                     domain = self._get_domain(self.provider_config.get_login_url())
                     for name, value in cf_cookies.items():
                         try:
-                            await context.add_cookies([{
-                                "name": name,
-                                "value": value,
-                                "domain": domain,
-                                "path": "/"
-                            }])
+                            await context.add_cookies(
+                                [
+                                    {
+                                        "name": name,
+                                        "value": value,
+                                        "domain": domain,
+                                        "path": "/",
+                                    }
+                                ]
+                            )
                         except Exception as cookie_error:
                             logger.debug(f"⚠️ 注入 cookie {name} 失败: {cookie_error}")
 
@@ -441,7 +528,11 @@ class Authenticator(ABC):
     async def _init_page_and_check_cloudflare(self, page: Page) -> bool:
         """初始化页面并检查Cloudflare"""
         try:
-            await page.goto(self.provider_config.get_login_url(), wait_until="domcontentloaded", timeout=TimeoutConfig.PAGE_LOAD)
+            await page.goto(
+                self.provider_config.get_login_url(),
+                wait_until="domcontentloaded",
+                timeout=TimeoutConfig.PAGE_LOAD,
+            )
             await page.wait_for_timeout(TimeoutConfig.SHORT_WAIT_3)
 
             # CI 环境下，页面加载后添加行为模拟
@@ -456,11 +547,12 @@ class Authenticator(ABC):
             page_content = await page.content()
 
             # 更准确地检测Cloudflare验证页
-            is_cloudflare = any(marker in page_content.lower() for marker in [
-                "just a moment",
-                "checking your browser",
-                "cloudflare"
-            ]) or ("verification" in page_title.lower() or "checking" in page_title.lower())
+            is_cloudflare = any(
+                marker in page_content.lower()
+                for marker in ["just a moment", "checking your browser", "cloudflare"]
+            ) or (
+                "verification" in page_title.lower() or "checking" in page_title.lower()
+            )
 
             if is_cloudflare:
                 logger.info(f"🛡️ 检测到Cloudflare验证页面，等待通过...")
@@ -470,9 +562,13 @@ class Authenticator(ABC):
             logger.warning(f"⚠️ 页面初始化异常: {e}，尝试继续...")
             return True  # 即使初始化失败也尝试继续
 
-    def _log_cookies_info(self, cookies_dict: Dict[str, str], final_cookies: list, auth_type: str):
+    def _log_cookies_info(
+        self, cookies_dict: Dict[str, str], final_cookies: list, auth_type: str
+    ):
         """统一的cookies信息日志"""
-        logger.info(f"🍪 [{self.auth_config.username}] {auth_type} OAuth认证完成，获取到 {len(cookies_dict)} 个cookies")
+        logger.info(
+            f"🍪 [{self.auth_config.username}] {auth_type} OAuth认证完成，获取到 {len(cookies_dict)} 个cookies"
+        )
 
         found_key_cookies = [name for name in KEY_COOKIE_NAMES if name in cookies_dict]
         if found_key_cookies:
@@ -481,15 +577,18 @@ class Authenticator(ABC):
         else:
             logger.warning(f"   ⚠️ 未找到标准认证cookie")
             for i, cookie in enumerate(final_cookies[:5]):
-                cookie_domain = cookie.get('domain', 'N/A')
+                cookie_domain = cookie.get("domain", "N/A")
                 logger.info(f"      {cookie['name']}: *** (domain: {cookie_domain})")
             if len(cookies_dict) > 5:
                 logger.info(f"      ... 还有 {len(cookies_dict) - 5} 个cookies")
 
-    async def _fill_password(self, password_input, error_prefix: str = "Password input failed") -> Optional[str]:
+    async def _fill_password(
+        self, password_input, error_prefix: str = "Password input failed"
+    ) -> Optional[str]:
         """安全填写密码 - 模拟人类逐字符输入"""
         try:
             import random
+
             # CI 环境下使用更自然的打字延迟
             if self.enable_behavior_simulation:
                 # 模拟人类逐字符输入，增加更大的随机延迟
@@ -518,7 +617,9 @@ class Authenticator(ABC):
         try:
             if self.enable_behavior_simulation:
                 logger.debug(f"🤖 使用行为模拟点击: {selector}")
-                return await simulate_click_with_behavior(page, selector, logger, with_movement=True)
+                return await simulate_click_with_behavior(
+                    page, selector, logger, with_movement=True
+                )
             else:
                 await page.click(selector)
                 logger.debug(f"✅ 点击元素: {selector}")
@@ -527,7 +628,9 @@ class Authenticator(ABC):
             logger.warning(f"⚠️ 点击失败 {selector}: {e}")
             return False
 
-    async def _simulate_human_typing(self, page: Page, selector: str, text: str) -> bool:
+    async def _simulate_human_typing(
+        self, page: Page, selector: str, text: str
+    ) -> bool:
         """模拟人类打字行为（CI 环境优化版）
 
         在 CI 环境下，使用逐字符打字模拟；在非 CI 环境下，使用普通填充。
@@ -587,7 +690,7 @@ class Authenticator(ABC):
         context: BrowserContext,
         operation_func,
         operation_name: str,
-        max_retries: int = 3
+        max_retries: int = 3,
     ):
         """
         通用重试方法 - 支持多种重试策略
@@ -605,7 +708,9 @@ class Authenticator(ABC):
         result = None
 
         for retry in range(max_retries):
-            logger.info(f"🔑 [{self.auth_config.username}] {operation_name}... (尝试 {retry + 1}/{max_retries})")
+            logger.info(
+                f"🔑 [{self.auth_config.username}] {operation_name}... (尝试 {retry + 1}/{max_retries})"
+            )
 
             # 每次重试前等待递增的时间，并采取不同的策略
             if retry > 0:
@@ -620,25 +725,35 @@ class Authenticator(ABC):
                         await page.reload(wait_until="domcontentloaded", timeout=30000)
                         await page.wait_for_timeout(TimeoutConfig.MEDIUM_WAIT)
                     except Exception as e:
-                        logger.warning(f"⚠️ [{self.auth_config.username}] 刷新页面失败: {e}")
+                        logger.warning(
+                            f"⚠️ [{self.auth_config.username}] 刷新页面失败: {e}"
+                        )
 
                 # 策略2：重新访问登录页
                 elif retry == 2:
                     try:
-                        logger.info(f"🔄 [{self.auth_config.username}] 重新访问登录页...")
+                        logger.info(
+                            f"🔄 [{self.auth_config.username}] 重新访问登录页..."
+                        )
                         await page.goto(
                             self.provider_config.get_login_url(),
                             wait_until="domcontentloaded",
-                            timeout=30000
+                            timeout=30000,
                         )
                         await page.wait_for_timeout(TimeoutConfig.MEDIUM_WAIT_10)
                     except Exception as e:
-                        logger.warning(f"⚠️ [{self.auth_config.username}] 重新访问登录页失败: {e}")
+                        logger.warning(
+                            f"⚠️ [{self.auth_config.username}] 重新访问登录页失败: {e}"
+                        )
 
             # 获取最新cookies（如果需要的话，operation_func可以在内部处理）
             current_cookies = await context.cookies()
-            cookies_dict = {cookie["name"]: cookie["value"] for cookie in current_cookies}
-            logger.info(f"🍪 [{self.auth_config.username}] 当前有 {len(cookies_dict)} 个cookies")
+            cookies_dict = {
+                cookie["name"]: cookie["value"] for cookie in current_cookies
+            }
+            logger.info(
+                f"🍪 [{self.auth_config.username}] 当前有 {len(cookies_dict)} 个cookies"
+            )
 
             # 执行操作
             result = await operation_func(cookies_dict, page)
@@ -646,7 +761,9 @@ class Authenticator(ABC):
                 logger.info(f"✅ [{self.auth_config.username}] {operation_name}成功")
                 break
             elif retry < max_retries - 1:
-                logger.warning(f"⚠️ [{self.auth_config.username}] 第 {retry + 1} 次尝试失败，继续重试...")
+                logger.warning(
+                    f"⚠️ [{self.auth_config.username}] 第 {retry + 1} 次尝试失败，继续重试..."
+                )
             else:
                 logger.error(f"❌ [{self.auth_config.username}] 所有重试均失败")
 
